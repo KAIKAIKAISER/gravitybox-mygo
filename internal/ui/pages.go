@@ -265,50 +265,54 @@ func (a *App) renderAccountCard(c *mygoui.Context, email, displayName, tier stri
 		borderCol = mygoui.RGBA(37, 99, 235, 0.45)
 	}
 	mygoui.Column(c.Key("acard-"+email)).Padding(16).Gap(12).Radius(12).Background(cardBg).Border(1, borderCol).Children(func() {
-		mygoui.Row(c).Gap(8).AlignItems(mygoui.Center).Children(func() {
-			mygoui.Column(c).Grow(1).Gap(2).Children(func() {
-				mygoui.Row(c).Gap(6).AlignItems(mygoui.Center).Children(func() {
-					mygoui.Text(c, displayName).FontSize(14).Bold()
-					if tier != "" {
-						mygoui.Badge(c, tier)
+		mygoui.Column(c).Gap(6).Children(func() {
+			mygoui.Row(c).Gap(8).AlignItems(mygoui.Center).Children(func() {
+				mygoui.Text(c, displayName).FontSize(15).Bold().NoWrap()
+				if tier != "" {
+					mygoui.Badge(c, tier)
+				}
+				if isActive {
+					mygoui.Badge(c, "当前账号").Background(mygoui.RGBA(37, 99, 235, 0.14)).TextColor(mygoui.RGB(37, 99, 235))
+				}
+				mygoui.Spacer(c)
+				if isActive {
+					if mygoui.Button(c, "↻").Disabled(a.acctBusy.Load()).Clicked() {
+						a.snapshotCurrentAccountAsync()
+					}
+				} else if isSaved {
+					if mygoui.PrimaryButton(c, "切换").Disabled(a.acctBusy.Load()).Clicked() {
+						a.switchAccountAsync(email)
+					}
+				}
+				if isSaved {
+					if mygoui.Button(c, "重命名").Clicked() {
+						a.renameTargetEmail = email
+						a.renameInput = displayName
+						a.showRenameModal = true
+					}
+					if mygoui.Button(c, "删除").Clicked() {
+						a.deleteTargetEmail = email
+						a.showDeleteModal = true
+					}
+				}
+				toggleIcon := "▴"
+				if collapsed {
+					toggleIcon = "▾"
+				}
+				if mygoui.Button(c, toggleIcon).Clicked() {
+					a.collapsedAccounts[email] = !collapsed
+				}
+			})
+			if displayName != email || isActive {
+				mygoui.Row(c).Gap(8).AlignItems(mygoui.Center).Children(func() {
+					if displayName != email {
+						mygoui.Text(c, email).FontSize(12).TextColor(t.TextMuted)
 					}
 					if isActive {
-						mygoui.Badge(c, "当前账号").Background(mygoui.RGBA(37, 99, 235, 0.14)).TextColor(mygoui.RGB(37, 99, 235))
 						mygoui.Badge(c, "切换前请刷新登录凭据; 当前运行账号可重新保存当前账号").
 							Background(mygoui.RGBA(217, 119, 6, 0.14)).TextColor(mygoui.RGB(180, 83, 9))
 					}
 				})
-				if displayName != email {
-					mygoui.Text(c, email).FontSize(12).TextColor(t.TextMuted)
-				}
-			})
-
-			if isActive {
-				if mygoui.Button(c, "↻").Disabled(a.acctBusy.Load()).Clicked() {
-					a.snapshotCurrentAccountAsync()
-				}
-			} else if isSaved {
-				if mygoui.PrimaryButton(c, "切换").Disabled(a.acctBusy.Load()).Clicked() {
-					a.switchAccountAsync(email)
-				}
-			}
-			if isSaved {
-				if mygoui.Button(c, "重命名").Clicked() {
-					a.renameTargetEmail = email
-					a.renameInput = displayName
-					a.showRenameModal = true
-				}
-				if mygoui.Button(c, "删除").Clicked() {
-					a.deleteTargetEmail = email
-					a.showDeleteModal = true
-				}
-			}
-			toggleIcon := "▴"
-			if collapsed {
-				toggleIcon = "▾"
-			}
-			if mygoui.Button(c, toggleIcon).Clicked() {
-				a.collapsedAccounts[email] = !collapsed
 			}
 		})
 
@@ -349,25 +353,30 @@ func (a *App) usagePage(c *mygoui.Context) {
 		}
 	}
 
-	mygoui.Row(c).Gap(8).AlignItems(mygoui.Center).Children(func() {
-		mygoui.Text(c, a.t("nav.usage", "用量")).FontSize(22).Bold().Grow(1)
-		if mygoui.Select(c, &a.usageAcctFilter, acctOptions).Label("账号筛选").Changed() {
-			a.refreshAsync()
-		}
-		if mygoui.Segmented(c, &a.usagePeriod, "今日", "近 7 天", "近 30 天", "全部").Label("统计周期").Changed() {
-			a.refreshAsync()
-		}
-		if mygoui.Button(c, "刷新").Clicked() {
-			a.refreshAsync()
-		}
-		if mygoui.Button(c, "导出…").Clicked() {
-			path, err := usage.ExportJSON(a.usageSummary)
-			if err != nil {
-				a.statusNotice = fmt.Sprintf("导出失败: %v", err)
-			} else {
-				a.statusNotice = "已导出用量报告至: " + path
+	mygoui.Column(c).Gap(10).Children(func() {
+		mygoui.Row(c).Gap(8).AlignItems(mygoui.Center).Children(func() {
+			mygoui.Text(c, a.t("nav.usage", "用量")).FontSize(22).Bold().Grow(1)
+			if mygoui.Button(c, "刷新").Clicked() {
+				a.refreshAsync()
 			}
-		}
+			if mygoui.Button(c, "导出…").Clicked() {
+				path, err := usage.ExportJSON(a.usageSummary)
+				if err != nil {
+					a.statusNotice = fmt.Sprintf("导出失败: %v", err)
+				} else {
+					a.statusNotice = "已导出用量报告至: " + path
+				}
+			}
+		})
+		mygoui.Row(c).Gap(8).AlignItems(mygoui.Center).Children(func() {
+			if mygoui.Select(c, &a.usageAcctFilter, acctOptions).Label("账号筛选").Changed() {
+				a.refreshAsync()
+			}
+			mygoui.Spacer(c)
+			if mygoui.Segmented(c, &a.usagePeriod, "今日", "近 7 天", "近 30 天", "全部").Label("统计周期").Changed() {
+				a.refreshAsync()
+			}
+		})
 	})
 
 	periodLabels := []string{"今日", "近 7 天", "近 30 天", "全部"}
@@ -493,17 +502,17 @@ func (a *App) costDonutRow(c *mygoui.Context) {
 	}
 	slices := chart.Pie(shares, 0.03)
 
-	mygoui.Row(c).Gap(18).AlignItems(mygoui.Center).Children(func() {
-		ring := mygoui.Box(c).Size(128, 128).Label("API 费用估算")
+	mygoui.Row(c).Gap(14).AlignItems(mygoui.Center).Children(func() {
+		ring := mygoui.Box(c).Size(112, 112).Label("API 费用估算")
 		ring.Draw(func(p *mygoui.Painter, r mygoui.Rect) {
 			cx, cy := r.X+r.W/2, r.Y+r.H/2
 			for i, s := range slices {
-				p.FillPath(chart.Sector(cx, cy, 40, 58, s), palette[i%len(palette)])
+				p.FillPath(chart.Sector(cx, cy, 34, 50, s), palette[i%len(palette)])
 			}
 		})
 		ring.Children(func() {
 			mygoui.Column(c).Fill().Center().Children(func() {
-				mygoui.Text(c, usage.FormatUSD(a.usageSummary.PeriodUSD)).FontSize(15).Bold()
+				mygoui.Text(c, usage.FormatUSD(a.usageSummary.PeriodUSD)).FontSize(14).Bold()
 				mygoui.Text(c, "估算").FontSize(11).TextColor(t.TextMuted)
 			})
 		})

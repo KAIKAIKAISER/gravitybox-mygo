@@ -106,11 +106,22 @@ func LoadSummary(ctx context.Context, period int, accountFilter string) Summary 
 		periodStart = 0
 	}
 
-	rows, err := db.Query(ctx, `SELECT timestamp, account_id, model, payload FROM events ORDER BY timestamp DESC`)
+	rows, err := db.Query(ctx, `
+		SELECT e.timestamp, e.account_id, e.model, e.payload, COALESCE(l.usd, -1)
+		FROM events e
+		LEFT JOIN rate_locks l ON l.event_key = e.event_key
+		LEFT JOIN event_aliases a ON a.legacy_key = e.event_key
+		WHERE a.legacy_key IS NULL
+		ORDER BY e.timestamp DESC`)
 	if err != nil {
-		return out
+		// Fallback for older ledger schemas without rate_locks/event_aliases
+		rows, err = db.Query(ctx, `SELECT timestamp, account_id, model, payload, -1 FROM events ORDER BY timestamp DESC`)
+		if err != nil {
+			return out
+		}
 	}
 
+	priceMap := loadPriceLookup()
 	todayByModel := map[string]*ModelSummary{}
 	periodByModel := map[string]*ModelSummary{}
 	dailyBuckets := map[string]int64{}
@@ -144,14 +155,23 @@ func LoadSummary(ctx context.Context, period int, accountFilter string) Summary 
 		if model == "" {
 			model = "unknown"
 		}
+		evUSD := ev.EstimatedUSD
+		if len(r) >= 5 {
+			if locked := toFloat64(r[4]); locked >= 0 {
+				evUSD = locked
+			}
+		}
+		if evUSD <= 0 {
+			evUSD = estimateFromPricing(priceMap, model, ev.InputTokens, ev.CachedTokens, ev.OutputTokens)
+		}
 
 		// Overview (global today & total)
 		out.TotalTokens += ev.TotalTokens
-		out.TotalUSD += ev.EstimatedUSD
+		out.TotalUSD += evUSD
 		out.TotalRequests++
 		if ts >= dayStart {
 			out.TodayTokens += ev.TotalTokens
-			out.TodayUSD += ev.EstimatedUSD
+			out.TodayUSD += evUSD
 			out.TodayRequests++
 			hr := time.Unix(ts, 0).In(loc).Hour()
 			if hr >= 0 && hr < 24 {
@@ -163,7 +183,7 @@ func LoadSummary(ctx context.Context, period int, accountFilter string) Summary 
 				todayByModel[model] = tm
 			}
 			tm.TotalTokens += ev.TotalTokens
-			tm.EstimatedUSD += ev.EstimatedUSD
+			tm.EstimatedUSD += evUSD
 			tm.RequestCount++
 		}
 
@@ -181,7 +201,7 @@ func LoadSummary(ctx context.Context, period int, accountFilter string) Summary 
 		out.PeriodInput += ev.InputTokens
 		out.PeriodCached += ev.CachedTokens
 		out.PeriodOutput += ev.OutputTokens
-		out.PeriodUSD += ev.EstimatedUSD
+		out.PeriodUSD += evUSD
 		out.PeriodRequests++
 
 		pm := periodByModel[model]
@@ -190,7 +210,7 @@ func LoadSummary(ctx context.Context, period int, accountFilter string) Summary 
 			periodByModel[model] = pm
 		}
 		pm.TotalTokens += ev.TotalTokens
-		pm.EstimatedUSD += ev.EstimatedUSD
+		pm.EstimatedUSD += evUSD
 		pm.RequestCount++
 
 		if period != 0 {
@@ -205,7 +225,7 @@ func LoadSummary(ctx context.Context, period int, accountFilter string) Summary 
 				CachedTokens: ev.CachedTokens,
 				OutputTokens: ev.OutputTokens,
 				TotalTokens:  ev.TotalTokens,
-				EstimatedUSD: ev.EstimatedUSD,
+				EstimatedUSD: evUSD,
 			})
 		}
 	}
@@ -378,6 +398,34 @@ func toInt64(v any) int64 {
 	default:
 		return 0
 	}
+}
+
+func toFloat64(v any) float64 {
+	switch x := v.(type) {
+	case float64:
+		return x
+	case int64:
+		return float64(x)
+	default:
+		return -1
+	}
+}
+
+func loadPriceLookup() map[string]PriceEntry {
+	entries := LoadPricingTable()
+	m := make(map[string]PriceEntry, len(entries))
+	for _, e := range entries {
+		m[e.Model] = e
+	}
+	return m
+}
+
+func estimateFromPricing(m map[string]PriceEntry, model string, inTok, cachedTok, outTok int64) float64 {
+	p, ok := m[model]
+	if !ok {
+		return 0
+	}
+	return (float64(inTok)*p.InputPerM + float64(cachedTok)*p.CacheReadM + float64(outTok)*p.OutputPerM) / 1_000_000.0
 }
 
 // FormatTokens formats token counts into K/M/B strings matching upstream.

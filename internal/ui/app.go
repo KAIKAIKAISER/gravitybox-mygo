@@ -28,7 +28,7 @@ import (
 	"gravitybox-mygo/resources"
 )
 
-const appVersion = "1.2.2"
+const appVersion = "1.2.3"
 
 var (
 	svgOverview = mygoui.MustParseSVG([]byte(`<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg>`))
@@ -203,8 +203,8 @@ func (a *App) onReady() {
 		Title:     "GravityBox",
 		Width:     1040,
 		Height:    720,
-		MinWidth:  860,
-		MinHeight: 580,
+		MinWidth:  740,
+		MinHeight: 480,
 		Hidden:    a.cfg.StartInTray,
 		Content:   mygoui.View(a.mainView),
 	})
@@ -698,23 +698,25 @@ func (a *App) popoverView(c *mygoui.Context) {
 
 func (a *App) mainView(c *mygoui.Context) {
 	t := c.Theme()
-	mygoui.Row(c).Fill().Background(t.Background).Children(func() {
+	mygoui.Row(c).Fill().AlignItems(mygoui.Stretch).Background(t.Background).Children(func() {
 		a.sidebarView(c)
-		mygoui.Scroll(c).Grow(1).Padding(24).Gap(16).Children(func() {
-			switch a.activeNav {
-			case "overview":
-				a.overviewPage(c)
-			case "accounts":
-				a.accountsPage(c)
-			case "usage":
-				a.usagePage(c)
-			case "localization":
-				a.localizationPage(c)
-			case "settings":
-				a.settingsPage(c)
-			case "about":
-				a.aboutPage(c)
-			}
+		mygoui.Scroll(c).Grow(1).FillHeight().Children(func() {
+			mygoui.Column(c).FillWidth().Padding(24).Gap(16).Children(func() {
+				switch a.activeNav {
+				case "overview":
+					a.overviewPage(c)
+				case "accounts":
+					a.accountsPage(c)
+				case "usage":
+					a.usagePage(c)
+				case "localization":
+					a.localizationPage(c)
+				case "settings":
+					a.settingsPage(c)
+				case "about":
+					a.aboutPage(c)
+				}
+			})
 		})
 	})
 	a.renderModals(c)

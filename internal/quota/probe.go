@@ -264,7 +264,10 @@ func parseQuotaSummary(raw []byte) []FamilyQuota {
 	} else {
 		_ = json.Unmarshal(raw, &root)
 	}
-	rawGroups, _ := root["quotaGroups"].([]any)
+	rawGroups, _ := root["groups"].([]any)
+	if len(rawGroups) == 0 {
+		rawGroups, _ = root["quotaGroups"].([]any)
+	}
 	if len(rawGroups) == 0 {
 		return nil
 	}
@@ -288,7 +291,10 @@ func parseQuotaSummary(raw []byte) []FamilyQuota {
 			if !ok {
 				continue
 			}
-			frac, _ := bm["remainingFraction"].(float64)
+			frac, ok := bm["remainingFraction"].(float64)
+			if !ok {
+				frac, _ = bm["remaining_fraction"].(float64)
+			}
 			pct := frac * 100
 			if pct < 0 {
 				pct = 0
@@ -299,13 +305,22 @@ func parseQuotaSummary(raw []byte) []FamilyQuota {
 				fq.RemainingPct = pct
 			}
 			win, _ := bm["window"].(string)
+			bucketID, _ := bm["bucketId"].(string)
+			if bucketID == "" {
+				bucketID, _ = bm["bucket_id"].(string)
+			}
+			bName, _ := bm["displayName"].(string)
 			reset, _ := bm["resetTime"].(string)
-			switch strings.ToLower(win) {
-			case "5h", "five_hour":
+			if reset == "" {
+				reset, _ = bm["reset_time"].(string)
+			}
+			winText := strings.ToLower(win + " " + bucketID + " " + bName)
+			switch {
+			case strings.Contains(winText, "5h") || strings.Contains(winText, "5_h") || strings.Contains(winText, "5-h") || strings.Contains(winText, "five_hour") || strings.Contains(winText, "fivehour"):
 				fq.HasFiveHour = true
 				fq.FiveHourPct = pct
 				fq.FiveHourReset = reset
-			case "weekly", "7d":
+			case strings.Contains(winText, "week") || strings.Contains(winText, "7d") || strings.Contains(winText, "seven_day"):
 				fq.HasWeekly = true
 				fq.WeeklyPct = pct
 				fq.WeeklyReset = reset
