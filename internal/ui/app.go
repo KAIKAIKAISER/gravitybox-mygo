@@ -2,16 +2,19 @@
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"io"
 	"log"
+	"net/http"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"sync/atomic"
 	"time"
 
 	"github.com/egoist/mygo"
 	mygoui "github.com/egoist/mygo/ui"
-	"github.com/egoist/mygo/ui/chart"
 
 	"gravitybox-mygo/internal/accounts"
 	"gravitybox-mygo/internal/asar"
@@ -25,6 +28,8 @@ import (
 	"gravitybox-mygo/resources"
 )
 
+const appVersion = "1.2.2"
+
 var (
 	svgOverview = mygoui.MustParseSVG([]byte(`<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg>`))
 	svgAccounts = mygoui.MustParseSVG([]byte(`<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>`))
@@ -32,6 +37,14 @@ var (
 	svgLocale   = mygoui.MustParseSVG([]byte(`<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m5 8 6 6"/><path d="m4 14 6-6 2-3"/><path d="M2 5h12"/><path d="M7 2h1"/><path d="m22 22-5-10-5 10"/><path d="M14 18h6"/></svg>`))
 	svgSettings = mygoui.MustParseSVG([]byte(`<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9c.26.6.77 1 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>`))
 	svgAbout    = mygoui.MustParseSVG([]byte(`<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>`))
+	svgSwitch   = mygoui.MustParseSVG([]byte(`<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m17 2 4 4-4 4"/><path d="M3 11v-1a4 4 0 0 1 4-4h14"/><path d="m7 22-4-4 4-4"/><path d="M21 13v1a4 4 0 0 1-4 4H3"/></svg>`))
+	svgRefresh  = mygoui.MustParseSVG([]byte(`<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/><path d="M8 16H3v5"/></svg>`))
+	svgGlobe    = mygoui.MustParseSVG([]byte(`<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg>`))
+	svgHud      = mygoui.MustParseSVG([]byte(`<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="M7 15h4"/><path d="M13 15h4"/></svg>`))
+	svgDollar   = mygoui.MustParseSVG([]byte(`<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="1" x2="12" y2="23"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg>`))
+	svgBolt     = mygoui.MustParseSVG([]byte(`<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>`))
+	svgLink     = mygoui.MustParseSVG([]byte(`<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>`))
+	svgStorage  = mygoui.MustParseSVG([]byte(`<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>`))
 )
 
 type navItem struct {
@@ -56,25 +69,36 @@ type App struct {
 	popoverWin *mygo.Window
 	tray       *mygo.Tray
 	quitting   bool
+	sawRunning bool
 
 	logoBmp   *mygoui.Bitmap
 	modelBmps map[string]*mygoui.Bitmap
 
-	cfg          config.Config
-	activeNav    string
-	selectedLang string
-	usagePeriod  int // 0: 今日, 1: 累计
+	cfg              config.Config
+	autoSwitch       accounts.AutoSwitchConfig
+	activeNav        string
+	selectedLang     string
+	selectedInterval string
+	usagePeriod      int    // 0: 今日, 1: 近 7 天, 2: 近 30 天, 3: 全部
+	usageAcctFilter  string // "全部账号" or email
+
+	// Collapse state on Accounts page
+	allCollapsed      bool
+	collapsedAccounts map[string]bool
 
 	controller *cdp.Controller
 	refreshing atomic.Bool
 	asarBusy   atomic.Bool
 	acctBusy   atomic.Bool
 	relaunch   atomic.Bool
+	syncBusy   atomic.Bool
+	updBusy    atomic.Bool
 
 	// Live probe state
 	antigravityRunning bool
 	appDir             string
 	asarStatus         asar.Status
+	zhPackInfo         asar.ZhPackInfo
 	cdpStatus          cdp.ControllerStatus
 	liveQuota          quota.LiveStatus
 	usageSummary       usage.Summary
@@ -83,11 +107,30 @@ type App struct {
 	lastProbeAt        time.Time
 	statusNotice       string
 	accountNotice      string
+	updateNotice       string
+	latestVersion      string
 
 	// Maintenance state
 	cacheItems      []maintenance.CacheItem
 	cacheTotalBytes int64
 	lastCleanMsg    string
+
+	// Modal flags & fields
+	showAddAccountModal  bool
+	showAutoSwitchModal  bool
+	autoSwitchThreshText string
+	autoSwitchTargetText string
+	showRenameModal      bool
+	renameTargetEmail    string
+	renameInput          string
+	showDeleteModal      bool
+	deleteTargetEmail    string
+	showPricingModal     bool
+	pricingEntries       []usage.PriceEntry
+	showEventsModal      bool
+	showStorageModal     bool
+	showScanModal        bool
+	scanResult           asar.ScanResult
 }
 
 // Run initializes and runs the GravityBox application.
@@ -97,12 +140,20 @@ func Run() error {
 	if err != nil {
 		return err
 	}
+	asCfg := accounts.LoadAutoSwitch()
 	app := &App{
-		cfg:          cfg,
-		activeNav:    "overview",
-		selectedLang: langLabel(cfg.AppLanguage),
-		controller:   ctrl,
-		modelBmps:    make(map[string]*mygoui.Bitmap),
+		cfg:                  cfg,
+		autoSwitch:           asCfg,
+		activeNav:            "overview",
+		selectedLang:         langLabel(cfg.AppLanguage),
+		selectedInterval:     intervalLabel(cfg.QuotaRefreshInterval),
+		usageAcctFilter:      "全部账号",
+		collapsedAccounts:    make(map[string]bool),
+		controller:           ctrl,
+		modelBmps:            make(map[string]*mygoui.Bitmap),
+		autoSwitchThreshText: fmt.Sprintf("%.0f", asCfg.ThresholdPct),
+		autoSwitchTargetText: fmt.Sprintf("%.0f", asCfg.TargetPct),
+		updateNotice:         "已是最新版本",
 	}
 
 	mygo.App.SetName("GravityBox")
@@ -150,10 +201,10 @@ func (a *App) onReady() {
 
 	a.mainWin = mygo.NewWindow(mygo.WindowOptions{
 		Title:     "GravityBox",
-		Width:     980,
-		Height:    680,
-		MinWidth:  820,
-		MinHeight: 560,
+		Width:     1040,
+		Height:    720,
+		MinWidth:  860,
+		MinHeight: 580,
 		Hidden:    a.cfg.StartInTray,
 		Content:   mygoui.View(a.mainView),
 	})
@@ -218,6 +269,9 @@ func (a *App) onReady() {
 
 	a.refreshAsync()
 	go a.pollLoop()
+	if a.cfg.AutoCheckUpdates {
+		go a.checkUpdatesAsync()
+	}
 }
 
 func (a *App) pollLoop() {
@@ -241,6 +295,7 @@ func (a *App) refreshAsync() {
 		appDir := config.DetectAntigravityInstallDir(a.cfg.AppPath)
 		running := win32.IsAntigravityRunning()
 		asarSt := asar.InspectApp(appDir)
+		packInfo := asar.GetZhPackInfo(config.StateDir())
 
 		a.controller.UpdateConfig(
 			a.cfg.DebugPort,
@@ -260,17 +315,32 @@ func (a *App) refreshAsync() {
 			qCancel()
 		}
 
+		acctFilter := a.usageAcctFilter
+		if acctFilter == "全部账号" || acctFilter == "" {
+			acctFilter = "all"
+		}
 		uCtx, uCancel := context.WithTimeout(context.Background(), 3*time.Second)
-		uSum := usage.LoadSummary(uCtx)
+		uSum := usage.LoadSummary(uCtx, a.usagePeriod, acctFilter)
 		uCancel()
 
 		curID, savedList, _ := accounts.ListSaved()
 		items, total := maintenance.ScanSafeCaches()
 
+		// Follow Antigravity exit when enabled
+		if a.cfg.FollowAntigravity {
+			if running {
+				a.sawRunning = true
+			} else if a.sawRunning {
+				mygo.RunOnMain(func() { mygo.App.Quit() })
+				return
+			}
+		}
+
 		mygo.RunOnMain(func() {
 			a.appDir = appDir
 			a.antigravityRunning = running
 			a.asarStatus = asarSt
+			a.zhPackInfo = packInfo
 			a.cdpStatus = cdpSt
 			a.liveQuota = liveQ
 			a.usageSummary = uSum
@@ -357,7 +427,7 @@ func (a *App) safeRelaunchAsync() {
 	if !a.relaunch.CompareAndSwap(false, true) {
 		return
 	}
-	a.statusNotice = "正在安全关闭并重启 Antigravity…"
+	a.statusNotice = "正在关闭并安全重启 Antigravity…"
 	a.invalidateVisible()
 	go func() {
 		defer a.relaunch.Store(false)
@@ -372,7 +442,7 @@ func (a *App) safeRelaunchAsync() {
 		} else if err := win32.LaunchAntigravity(filepath.Join(dir, "Antigravity.exe"), a.cfg.DebugPort); err != nil {
 			msg = fmt.Sprintf("重启失败: %v", err)
 		} else {
-			msg = "已安全重启 Antigravity，正在连接调试端口…"
+			msg = "已重启 Antigravity，正在连接调试端口…"
 		}
 		mygo.RunOnMain(func() {
 			a.statusNotice = msg
@@ -387,7 +457,7 @@ func (a *App) applyDeepAsarAsync() {
 	if !a.asarBusy.CompareAndSwap(false, true) {
 		return
 	}
-	a.statusNotice = "正在写入 ASAR 深度汉化补丁并执行热注入…"
+	a.statusNotice = "正在应用深度汉化并热生效…"
 	a.invalidateVisible()
 	go func() {
 		defer a.asarBusy.Store(false)
@@ -419,6 +489,51 @@ func (a *App) restoreAsarAsync() {
 	}()
 }
 
+func (a *App) syncZhPackAsync() {
+	if !a.syncBusy.CompareAndSwap(false, true) {
+		return
+	}
+	a.statusNotice = "正在从 GitHub 同步最新汉化包…"
+	a.invalidateVisible()
+	go func() {
+		defer a.syncBusy.Store(false)
+		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+		msg, err := asar.SyncRemoteZhPack(ctx, config.StateDir())
+		cancel()
+		mygo.RunOnMain(func() {
+			if err != nil {
+				a.statusNotice = err.Error()
+			} else {
+				a.statusNotice = msg
+			}
+			a.invalidateVisible()
+		})
+		a.refreshAsync()
+	}()
+}
+
+func (a *App) scanNewStringsAsync() {
+	if !a.syncBusy.CompareAndSwap(false, true) {
+		return
+	}
+	a.statusNotice = "正在扫描当前版本未译英文文本…"
+	a.invalidateVisible()
+	go func() {
+		defer a.syncBusy.Store(false)
+		res, err := asar.ScanUntranslatedStrings(a.appDir, config.StateDir())
+		mygo.RunOnMain(func() {
+			if err != nil {
+				a.statusNotice = err.Error()
+			} else {
+				a.scanResult = res
+				a.showScanModal = true
+				a.statusNotice = fmt.Sprintf("扫描完成：发现 %d 条未覆盖文本", res.TotalFound)
+			}
+			a.invalidateVisible()
+		})
+	}()
+}
+
 func (a *App) snapshotCurrentAccountAsync() {
 	if !a.acctBusy.CompareAndSwap(false, true) {
 		return
@@ -426,7 +541,7 @@ func (a *App) snapshotCurrentAccountAsync() {
 	email := a.liveQuota.Email
 	name := a.liveQuota.Name
 	tier := a.liveQuota.Tier
-	a.accountNotice = "正在保存当前登录账号快照…"
+	a.accountNotice = "正在保存当前登录账号…"
 	a.invalidateVisible()
 	go func() {
 		defer a.acctBusy.Store(false)
@@ -437,7 +552,7 @@ func (a *App) snapshotCurrentAccountAsync() {
 			if err != nil {
 				a.accountNotice = err.Error()
 			} else {
-				a.accountNotice = fmt.Sprintf("已保存 %s 快照", email)
+				a.accountNotice = fmt.Sprintf("已保存当前账号 %s", email)
 			}
 			a.invalidateVisible()
 		})
@@ -465,6 +580,64 @@ func (a *App) switchAccountAsync(email string) {
 			a.invalidateVisible()
 		})
 		a.refreshAsync()
+	}()
+}
+
+func (a *App) checkPricingAsync() {
+	a.statusNotice = "正在同步最新模型价格基准…"
+	a.invalidateVisible()
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		msg, err := usage.CheckRemotePricing(ctx)
+		cancel()
+		mygo.RunOnMain(func() {
+			if err != nil {
+				a.statusNotice = fmt.Sprintf("同步失败: %v", err)
+			} else {
+				a.statusNotice = msg
+			}
+			a.invalidateVisible()
+		})
+	}()
+}
+
+func (a *App) checkUpdatesAsync() {
+	if !a.updBusy.CompareAndSwap(false, true) {
+		return
+	}
+	mygo.RunOnMain(func() {
+		a.updateNotice = "正在检查更新…"
+		a.invalidateVisible()
+	})
+	go func() {
+		defer a.updBusy.Store(false)
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.github.com/repos/KAIKAIKAISER/gravitybox-mygo/releases/latest", nil)
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			mygo.RunOnMain(func() {
+				a.updateNotice = "检查更新失败，请检查网络"
+				a.invalidateVisible()
+			})
+			return
+		}
+		raw, _ := io.ReadAll(io.LimitReader(resp.Body, 512*1024))
+		_ = resp.Body.Close()
+		var rel struct {
+			TagName string `json:"tag_name"`
+		}
+		_ = json.Unmarshal(raw, &rel)
+		latest := strings.TrimPrefix(strings.TrimSpace(rel.TagName), "v")
+		msg := "已是最新版本"
+		if latest != "" && latest != appVersion {
+			msg = fmt.Sprintf("发现新版本 v%s", latest)
+		}
+		mygo.RunOnMain(func() {
+			a.latestVersion = latest
+			a.updateNotice = msg
+			a.invalidateVisible()
+		})
 	}()
 }
 
@@ -503,7 +676,7 @@ func (a *App) popoverView(c *mygoui.Context) {
 			}
 		})
 		mygoui.Row(c).Gap(10).AlignItems(mygoui.Center).Children(func() {
-			mygoui.Text(c, "对话状态栏 (HUD)").Grow(1)
+			mygoui.Text(c, "对话状态栏").Grow(1)
 			if mygoui.Switch(c, &a.cfg.HudEnabled).Label("对话状态栏").Changed() {
 				a.saveConfig()
 			}
@@ -544,6 +717,7 @@ func (a *App) mainView(c *mygoui.Context) {
 			}
 		})
 	})
+	a.renderModals(c)
 }
 
 func (a *App) sidebarView(c *mygoui.Context) {
@@ -561,7 +735,6 @@ func (a *App) sidebarView(c *mygoui.Context) {
 
 	mygoui.Column(c).Width(204).FillHeight().Padding(16, 12).Gap(14).
 		Background(sidebarBg).BorderWidth(0, 1, 0, 0).BorderColor(t.Border).Children(func() {
-		// Brand Row
 		mygoui.Row(c).Padding(4, 6).Gap(8).AlignItems(mygoui.Center).Children(func() {
 			if a.logoBmp != nil {
 				mygoui.Image(c, a.logoBmp).Size(24, 24).Fit(mygoui.Contain).Radius(5)
@@ -569,7 +742,6 @@ func (a *App) sidebarView(c *mygoui.Context) {
 			mygoui.Text(c, "GravityBox").FontSize(16).Bold()
 		})
 
-		// Navigation items
 		mygoui.Column(c).Gap(3).Grow(1).Children(func() {
 			for _, item := range navItems {
 				item := item
@@ -598,7 +770,6 @@ func (a *App) sidebarView(c *mygoui.Context) {
 			}
 		})
 
-		// Footer status + launch button
 		mygoui.Column(c).Gap(8).Children(func() {
 			dotColor := mygoui.RGB(156, 163, 175)
 			if a.cdpStatus.Windows > 0 {
@@ -617,486 +788,20 @@ func (a *App) sidebarView(c *mygoui.Context) {
 	})
 }
 
-func (a *App) overviewPage(c *mygoui.Context) {
-	t := c.Theme()
-	mygoui.Row(c).AlignItems(mygoui.Center).Children(func() {
-		mygoui.Text(c, a.t("overview.title", "总览")).FontSize(22).Bold().Grow(1)
-	})
-
-	// Debug port missing warning banner (matches upstream amber banner)
-	if a.antigravityRunning && a.cdpStatus.Mode == "debug-port-missing" {
-		bannerBg := mygoui.RGB(254, 247, 230)
-		bannerBorder := mygoui.RGB(245, 208, 128)
-		if t.Dark {
-			bannerBg = mygoui.RGBA(217, 119, 6, 0.14)
-			bannerBorder = mygoui.RGBA(245, 158, 11, 0.35)
-		}
-		mygoui.Row(c).Padding(14, 16).Gap(14).Radius(12).AlignItems(mygoui.Center).Background(bannerBg).Border(1, bannerBorder).Children(func() {
-			mygoui.Column(c).Grow(1).Gap(4).Children(func() {
-				mygoui.Text(c, "未开启调试端口").FontSize(14).Bold()
-				mygoui.Text(c, "检测到 Antigravity 已运行但未开启调试端口，汉化与对话状态栏暂不可连接。请先保存工作后再安全重启。").
-					FontSize(12).TextColor(t.TextMuted)
-			})
-			if mygoui.PrimaryButton(c, "安全重启 Antigravity 以连接").Disabled(a.relaunch.Load()).Clicked() {
-				a.safeRelaunchAsync()
-			}
-		})
-	}
-
-	if a.statusNotice != "" {
-		mygoui.Text(c, a.statusNotice).FontSize(12).TextColor(t.Accent)
-	}
-
-	// Account & Quota Card
-	a.card(c, "", func() {
-		mygoui.Row(c).Gap(8).AlignItems(mygoui.Center).Children(func() {
-			display := "未检测到已登录账号"
-			if a.liveQuota.Connected {
-				display = a.liveQuota.Email
-				if a.liveQuota.Name != "" && a.liveQuota.Name != a.liveQuota.Email {
-					display = a.liveQuota.Name
-				}
-			}
-			mygoui.Text(c, display).FontSize(16).Bold()
-			if a.liveQuota.Connected && a.liveQuota.Tier != "" {
-				mygoui.Badge(c, a.liveQuota.Tier)
-			}
-			mygoui.Spacer(c)
-			if mygoui.Button(c, "刷新配额").Clicked() {
-				a.refreshAsync()
-			}
-		})
-		if a.liveQuota.Connected && a.liveQuota.Email != "" && a.liveQuota.Name != "" && a.liveQuota.Name != a.liveQuota.Email {
-			mygoui.Text(c, a.liveQuota.Email).FontSize(12).TextColor(t.TextMuted)
-		}
-
-		if !a.liveQuota.Connected {
-			msg := a.liveQuota.Error
-			if msg == "" {
-				msg = "启动 Antigravity 并登录后将自动显示 5 小时与每周配额水位"
-			}
-			mygoui.Text(c, msg).FontSize(12).TextColor(t.TextMuted)
-		} else if len(a.liveQuota.Windows) == 0 {
-			mygoui.Text(c, "已连接账号，暂未上报模型配额窗口").FontSize(12).TextColor(t.TextMuted)
-		} else {
-			mygoui.Grid(c).Columns(2).GapX(20).GapY(12).Children(func() {
-				for _, w := range a.liveQuota.Windows {
-					a.quotaBarRow(c, w)
-				}
-			})
-		}
-	})
-
-	// 3-Column Bento KPI Cards
-	mygoui.Grid(c).Columns(3).Gap(12).Children(func() {
-		a.metricCard(c, "今日 Token 用量", usage.FormatTokens(a.usageSummary.TodayTokens),
-			fmt.Sprintf("累计 %s Token", usage.FormatTokens(a.usageSummary.TotalTokens)))
-		a.metricCard(c, "今日费用估算", usage.FormatUSD(a.usageSummary.TodayUSD),
-			fmt.Sprintf("累计 %s", usage.FormatUSD(a.usageSummary.TotalUSD)))
-		a.metricCard(c, "今日请求数", fmt.Sprintf("%d", a.usageSummary.TodayRequests),
-			fmt.Sprintf("累计 %d 次", a.usageSummary.TotalRequests))
-	})
-
-	// 2-Column Bottom Bento (Hourly Chart + Active Models)
-	mygoui.Grid(c).Columns(2).Gap(12).Children(func() {
-		a.card(c, "", func() {
-			peakHour, peakVal := 0, int64(0)
-			for h, v := range a.usageSummary.TodayHourly {
-				if v > peakVal {
-					peakHour, peakVal = h, v
-				}
-			}
-			mygoui.Row(c).AlignItems(mygoui.Center).Children(func() {
-				mygoui.Text(c, "今日时段消耗").FontSize(14).Bold().Grow(1)
-				badge := "24 小时分布"
-				if peakVal > 0 {
-					badge = fmt.Sprintf("峰值 %02d时 · %s", peakHour, usage.FormatTokens(peakVal))
-				}
-				mygoui.Badge(c, badge)
-			})
-			a.hourlyBarChart(c, a.usageSummary.TodayHourly)
-		})
-
-		a.card(c, "", func() {
-			mygoui.Row(c).AlignItems(mygoui.Center).Children(func() {
-				mygoui.Text(c, "今日活跃模型").FontSize(14).Bold().Grow(1)
-				cnt := "暂无调用"
-				if len(a.usageSummary.TodayModels) > 0 {
-					cnt = fmt.Sprintf("%d", len(a.usageSummary.TodayModels))
-				}
-				mygoui.Badge(c, cnt)
-			})
-			if len(a.usageSummary.TodayModels) == 0 {
-				mygoui.Column(c).Padding(28, 0).Center().Children(func() {
-					mygoui.Text(c, "当前时间范围暂无模型调用记录").FontSize(12).TextColor(t.TextMuted)
-				})
-				return
-			}
-			total := max(int64(1), a.usageSummary.TodayTokens)
-			limit := min(3, len(a.usageSummary.TodayModels))
-			for i := 0; i < limit; i++ {
-				m := a.usageSummary.TodayModels[i]
-				pct := float64(m.TotalTokens) * 100 / float64(total)
-				mygoui.Column(c.Key("topm-"+m.Model)).Gap(4).Padding(6, 0).Children(func() {
-					mygoui.Row(c).AlignItems(mygoui.Center).Children(func() {
-						mygoui.Text(c, m.Model).FontSize(13).Bold().Grow(1)
-						mygoui.Text(c, fmt.Sprintf("%s Token", usage.FormatTokens(m.TotalTokens))).FontSize(12).Bold()
-					})
-					mygoui.Meter(c, pct, 0, 100, nil).Label(m.Model)
-					mygoui.Text(c, fmt.Sprintf("%d req · %.0f%% · %s", m.RequestCount, pct, usage.FormatUSD(m.EstimatedUSD))).
-						FontSize(11).TextColor(t.TextMuted)
-				})
-			}
-		})
-	})
-}
-
-func (a *App) hourlyBarChart(c *mygoui.Context, hourly [24]int64) {
-	t := c.Theme()
-	labels := make([]string, 24)
-	vals := make([]float64, 24)
-	for i := 0; i < 24; i++ {
-		labels[i] = fmt.Sprintf("%02d时", i)
-		vals[i] = float64(hourly[i])
-	}
-	x := chart.NewBand(labels...).Padding(0.35, 0.15)
-	_, hi := chart.Extent(vals...)
-	if hi <= 0 {
-		hi = 1000
-	}
-	y := chart.NewLinear(0, hi).Nice(3)
-	yTicks := y.Ticks(3)
-	for i := range yTicks {
-		yTicks[i].Label = usage.FormatTokens(int64(yTicks[i].Value))
-	}
-	var xTicks []chart.Tick
-	for _, h := range []int{0, 4, 8, 12, 16, 20, 23} {
-		xTicks = append(xTicks, chart.Tick{At: x.At(h), Label: labels[h]})
-	}
-
-	chart.Plot(c, chart.Axes{Left: yTicks, Bottom: xTicks}, func(area mygoui.Element) {
-		area.Draw(func(p *mygoui.Painter, r mygoui.Rect) {
-			for _, tk := range yTicks {
-				p.Line(r.X, chart.Y(r, tk.At), r.X+r.W, chart.Y(r, tk.At), 1, t.Border)
-			}
-		})
-		for i, v := range vals {
-			if v <= 0 {
-				continue
-			}
-			chart.Rect(c, x.Band(i), y.Span(0, v)).Radius(3).Background(t.Accent).
-				Tooltip(fmt.Sprintf("%s: %s Token", labels[i], usage.FormatTokens(hourly[i])))
-		}
-	}).Label("今日时段消耗").Height(150).Gap(6)
-}
-
-func (a *App) quotaBarRow(c *mygoui.Context, w quota.QuotaWindow) {
-	t := c.Theme()
-	mygoui.Column(c.Key("qw-"+w.Label)).Gap(5).Children(func() {
-		mygoui.Row(c).Gap(6).AlignItems(mygoui.Center).Children(func() {
-			if bmp := a.modelBmps[w.IconKey]; bmp != nil {
-				mygoui.Image(c, bmp).Size(15, 15).Fit(mygoui.Contain).Radius(3)
-			}
-			mygoui.Text(c, w.Label).FontSize(13).Bold().Grow(1)
-			if w.ResetCountdown != "" {
-				mygoui.Text(c, w.ResetCountdown).FontSize(12).TextColor(t.TextMuted)
-			}
-			pctText := fmt.Sprintf("%.0f%%", w.RemainingPct)
-			txt := mygoui.Text(c, pctText).FontSize(13).Bold()
-			if w.RemainingPct <= 10 {
-				txt.TextColor(mygoui.RGB(220, 38, 38))
-			}
-		})
-		mygoui.Meter(c, w.RemainingPct, 0, 100, &mygoui.MeterLevels{
-			Warning:       20,
-			Critical:      10,
-			NormalColor:   mygoui.RGB(37, 99, 235),
-			WarningColor:  mygoui.RGB(217, 119, 6),
-			CriticalColor: mygoui.RGB(220, 38, 38),
-		}).Label(w.Label)
-	})
-}
-
-func (a *App) metricCard(c *mygoui.Context, title, value, sub string) {
-	t := c.Theme()
-	a.card(c, "", func() {
-		mygoui.Text(c, title).FontSize(12).TextColor(t.TextMuted)
-		mygoui.Text(c, value).FontSize(26).Bold()
-		mygoui.Text(c, sub).FontSize(12).TextColor(t.TextMuted)
-	})
-}
-
-func (a *App) accountsPage(c *mygoui.Context) {
-	t := c.Theme()
-	mygoui.Text(c, a.t("nav.accounts", "账号")).FontSize(22).Bold()
-
-	a.card(c, "当前登录账号", func() {
-		if !a.liveQuota.Connected {
-			msg := a.liveQuota.Error
-			if msg == "" {
-				msg = "未检测到运行中的 Antigravity 登录账号"
-			}
-			mygoui.Text(c, msg).FontSize(13).TextColor(t.TextMuted)
-		} else {
-			mygoui.Row(c).Gap(8).AlignItems(mygoui.Center).Children(func() {
-				mygoui.Text(c, a.liveQuota.Email).FontSize(15).Bold().Grow(1)
-				mygoui.Badge(c, a.liveQuota.Tier)
-				if mygoui.PrimaryButton(c, "保存当前账号快照").Disabled(a.acctBusy.Load()).Clicked() {
-					a.snapshotCurrentAccountAsync()
-				}
-			})
-			if len(a.liveQuota.Windows) > 0 {
-				mygoui.Grid(c).Columns(2).GapX(20).GapY(10).Children(func() {
-					for _, w := range a.liveQuota.Windows {
-						a.quotaBarRow(c, w)
-					}
-				})
-			}
-		}
-		if a.accountNotice != "" {
-			mygoui.Text(c, a.accountNotice).FontSize(12).TextColor(t.Accent)
-		}
-	})
-
-	a.card(c, "已保存账号", func() {
-		if len(a.savedAccounts) == 0 {
-			mygoui.Text(c, "暂无已保存账号快照；请在 Antigravity 登录后点击上方「保存当前账号快照」。").FontSize(12).TextColor(t.TextMuted)
-			return
-		}
-		for _, acc := range a.savedAccounts {
-			acc := acc
-			mygoui.Row(c.Key("saved-"+acc.Email)).Gap(10).AlignItems(mygoui.Center).Padding(6, 0).Children(func() {
-				mygoui.Text(c, acc.Email).Grow(1)
-				if acc.SubscriptionTier != "" {
-					mygoui.Badge(c, acc.SubscriptionTier)
-				}
-				if acc.Email == a.liveQuota.Email || acc.ID == a.currentAccountID {
-					mygoui.Badge(c, "当前")
-				}
-				if mygoui.Button(c, "切换").Disabled(a.acctBusy.Load() || acc.Email == a.liveQuota.Email).Clicked() {
-					a.switchAccountAsync(acc.Email)
-				}
-			})
-		}
-	})
-}
-
-func (a *App) usagePage(c *mygoui.Context) {
-	t := c.Theme()
-	mygoui.Row(c).AlignItems(mygoui.Center).Children(func() {
-		mygoui.Text(c, a.t("nav.usage", "用量")).FontSize(22).Bold().Grow(1)
-		mygoui.Tabs(c, &a.usagePeriod, "今日", "累计全部")
-	})
-
-	tok := a.usageSummary.TodayTokens
-	usd := a.usageSummary.TodayUSD
-	req := a.usageSummary.TodayRequests
-	models := a.usageSummary.TodayModels
-	if a.usagePeriod == 1 {
-		tok = a.usageSummary.TotalTokens
-		usd = a.usageSummary.TotalUSD
-		req = a.usageSummary.TotalRequests
-		models = a.usageSummary.AllModels
-	}
-
-	mygoui.Grid(c).Columns(3).Gap(12).Children(func() {
-		a.metricCard(c, "Token 总量", usage.FormatTokens(tok), "来自本地用量账本")
-		a.metricCard(c, "费用估算", usage.FormatUSD(usd), "按公开模型定价核算")
-		a.metricCard(c, "请求次数", fmt.Sprintf("%d", req), "已记录生成次数")
-	})
-
-	a.card(c, "模型用量明细", func() {
-		if len(models) == 0 {
-			mygoui.Text(c, "暂无本地用量记录").FontSize(12).TextColor(t.TextMuted)
-			return
-		}
-		baseTotal := max(int64(1), tok)
-		for _, m := range models {
-			pct := float64(m.TotalTokens) * 100 / float64(baseTotal)
-			mygoui.Column(c.Key("um-"+m.Model)).Gap(4).Padding(6, 0).Children(func() {
-				mygoui.Row(c).AlignItems(mygoui.Center).Children(func() {
-					mygoui.Text(c, m.Model).Bold().Grow(1)
-					mygoui.Text(c, fmt.Sprintf("%s Token · %d 次 · %s", usage.FormatTokens(m.TotalTokens), m.RequestCount, usage.FormatUSD(m.EstimatedUSD))).FontSize(12)
-				})
-				mygoui.Meter(c, pct, 0, 100, nil).Label(m.Model)
-			})
-		}
-	})
-
-	a.card(c, "缓存维护", func() {
-		mygoui.Row(c).Gap(10).AlignItems(mygoui.Center).Children(func() {
-			mygoui.Text(c, fmt.Sprintf("可安全清理运行时缓存：%s", maintenance.FormatBytes(a.cacheTotalBytes))).Bold().Grow(1)
-			if mygoui.Button(c, "重新扫描").Clicked() {
-				a.refreshAsync()
-			}
-			if mygoui.PrimaryButton(c, "清理选中项").Disabled(a.cacheTotalBytes == 0).Clicked() {
-				movedBytes, movedCount, errs := maintenance.CleanSelected(a.cacheItems)
-				if len(errs) > 0 {
-					a.lastCleanMsg = fmt.Sprintf("已清理 %d 项 (%s)，部分文件被占用: %s", movedCount, maintenance.FormatBytes(movedBytes), errs[0])
-				} else {
-					a.lastCleanMsg = fmt.Sprintf("已清理 %d 项，释放 %s", movedCount, maintenance.FormatBytes(movedBytes))
-				}
-				a.refreshAsync()
-			}
-		})
-		if a.lastCleanMsg != "" {
-			mygoui.Text(c, a.lastCleanMsg).FontSize(12).TextColor(t.Accent)
-		}
-		mygoui.Divider(c)
-		if len(a.cacheItems) == 0 {
-			mygoui.Text(c, "未发现可清理的缓存目录").FontSize(12).TextColor(t.TextMuted)
-			return
-		}
-		for i := range a.cacheItems {
-			item := &a.cacheItems[i]
-			mygoui.Row(c.Key("cache-"+item.Name)).Gap(8).AlignItems(mygoui.Center).Children(func() {
-				mygoui.Checkbox(c, &item.Selected, item.Name).Grow(1)
-				mygoui.Text(c, maintenance.FormatBytes(item.Bytes)).FontSize(12).TextColor(t.TextMuted)
-			})
-		}
-	})
-}
-
-func (a *App) localizationPage(c *mygoui.Context) {
-	t := c.Theme()
-	mygoui.Text(c, "深度汉化").FontSize(22).Bold()
-
-	a.card(c, "应用级 ASAR 汉化与连接状态", func() {
-		a.kvRow(c, "安装路径", orDash(a.appDir))
-		a.kvRow(c, "官方客户端版本", orDash(a.asarStatus.AppVersion))
-		a.kvRow(c, "ASAR 汉化状态", a.asarSummary())
-		a.kvRow(c, "运行时词库", fmt.Sprintf("%d 条 (%s)", a.cdpStatus.DictionaryEntries, a.cdpStatus.DictionaryVersion))
-		a.kvRow(c, "已注入窗口数", fmt.Sprintf("%d", a.cdpStatus.Windows))
-		if a.statusNotice != "" {
-			mygoui.Text(c, a.statusNotice).FontSize(12).TextColor(t.Accent)
-		}
-		mygoui.Row(c).Gap(8).Children(func() {
-			if mygoui.PrimaryButton(c, "写入 ASAR 深度汉化").Disabled(!a.asarStatus.AppFound || a.asarBusy.Load()).Clicked() {
-				a.applyDeepAsarAsync()
-			}
-			if mygoui.Button(c, "恢复官方原版").Disabled(!a.asarStatus.HasBackup || a.asarBusy.Load()).Clicked() {
-				a.restoreAsarAsync()
-			}
-		})
-	})
-
-	a.card(c, "运行时热适配开关", func() {
-		mygoui.Row(c).Gap(10).AlignItems(mygoui.Center).Children(func() {
-			mygoui.Text(c, "启用 IDE 界面中文翻译").Grow(1)
-			if mygoui.Switch(c, &a.cfg.TranslationEnabled).Label("启用 IDE 界面中文翻译").Changed() {
-				a.saveConfig()
-			}
-		})
-		mygoui.Row(c).Gap(10).AlignItems(mygoui.Center).Children(func() {
-			mygoui.Text(c, "启用输入框对话状态栏 (HUD)").Grow(1)
-			if mygoui.Switch(c, &a.cfg.HudEnabled).Label("启用输入框对话状态栏").Changed() {
-				a.saveConfig()
-			}
-		})
-	})
-}
-
-func (a *App) settingsPage(c *mygoui.Context) {
-	t := c.Theme()
-	mygoui.Text(c, a.t("settings.title", "设置")).FontSize(22).Bold()
-
-	a.card(c, a.t("settings.language.title", "显示语言"), func() {
-		mygoui.Text(c, a.t("settings.language.subtitle", "同时决定 GravityBox 与 Antigravity 的界面语言")).FontSize(12).TextColor(t.TextMuted)
-		options := []string{"跟随系统", "简体中文", "English"}
-		if mygoui.Select(c, &a.selectedLang, options).Label("显示语言").Changed() {
-			switch a.selectedLang {
-			case "English":
-				a.cfg.AppLanguage = "en"
-			case "简体中文":
-				a.cfg.AppLanguage = "zh-Hans"
-			default:
-				a.cfg.AppLanguage = "system"
-			}
-			a.saveConfig()
-		}
-		mygoui.Row(c).Gap(10).AlignItems(mygoui.Center).Children(func() {
-			mygoui.Text(c, "启动时最小化到系统托盘").Grow(1)
-			if mygoui.Switch(c, &a.cfg.StartInTray).Label("启动时最小化到系统托盘").Changed() {
-				a.saveConfig()
-			}
-		})
-	})
-
-	a.card(c, "功能开关", func() {
-		mygoui.Row(c).Gap(10).AlignItems(mygoui.Center).Children(func() {
-			mygoui.Text(c, "IDE 中文翻译").Grow(1)
-			if mygoui.Switch(c, &a.cfg.TranslationEnabled).Label("IDE 中文翻译").Changed() {
-				a.saveConfig()
-			}
-		})
-		mygoui.Row(c).Gap(10).AlignItems(mygoui.Center).Children(func() {
-			mygoui.Text(c, "对话状态栏 (HUD)").Grow(1)
-			if mygoui.Switch(c, &a.cfg.HudEnabled).Label("对话状态栏").Changed() {
-				a.saveConfig()
-			}
-		})
-	})
-}
-
-func (a *App) aboutPage(c *mygoui.Context) {
-	t := c.Theme()
-	mygoui.Text(c, a.t("nav.about", "关于")).FontSize(22).Bold()
-	a.card(c, "GravityBox", func() {
-		mygoui.Row(c).Gap(12).AlignItems(mygoui.Center).Children(func() {
-			if a.logoBmp != nil {
-				mygoui.Image(c, a.logoBmp).Size(44, 44).Fit(mygoui.Contain).Radius(10)
-			}
-			mygoui.Column(c).Gap(2).Children(func() {
-				mygoui.Text(c, "GravityBox").FontSize(16).Bold()
-				mygoui.Text(c, "版本 v1.2.1").FontSize(12).TextColor(t.TextMuted)
-			})
-		})
-		mygoui.Divider(c)
-		a.kvRow(c, "数据目录", config.StateDir())
-		a.kvRow(c, "Antigravity 目录", orDash(a.appDir))
-		a.kvRow(c, "开源协议", "MIT")
-	})
-}
-
-func (a *App) card(c *mygoui.Context, title string, body func()) {
-	t := c.Theme()
-	mygoui.Column(c).Padding(16).Gap(12).Radius(12).Background(t.Surface).Border(1, t.Border).Children(func() {
-		if title != "" {
-			mygoui.Text(c, title).FontSize(14).Bold()
-		}
-		body()
-	})
-}
-
-func (a *App) kvRow(c *mygoui.Context, label, value string) {
-	t := c.Theme()
-	mygoui.Row(c).Gap(12).Children(func() {
-		mygoui.Text(c, label).FontSize(13).TextColor(t.TextMuted).Grow(1)
-		mygoui.Text(c, value).FontSize(13)
-	})
-}
-
 func (a *App) sidebarStatusText() string {
 	if !a.antigravityRunning {
 		return "等待 Antigravity 启动…"
 	}
 	if a.cdpStatus.Windows > 0 {
+		if a.asarStatus.IsPatched {
+			return "深度汉化已接管 · HUD 运行中"
+		}
 		return fmt.Sprintf("已连接 · %d 窗口", a.cdpStatus.Windows)
 	}
-	return "检测到 Antigravity 正在运行…"
-}
-
-func (a *App) asarSummary() string {
-	if !a.asarStatus.AppFound {
-		return "未检测到 app.asar"
-	}
 	if a.asarStatus.IsPatched {
-		return fmt.Sprintf("已深度汉化 (%s)", orDash(a.asarStatus.TagVersion))
+		return "深度汉化已接管 · 运行中"
 	}
-	if a.asarStatus.LegacyPatched {
-		return "检测到旧版 ASAR 汉化痕迹"
-	}
-	return "官方原版（未写入磁盘补丁）"
+	return "检测到 Antigravity 正在运行…"
 }
 
 func orDash(s string) string {
@@ -1114,5 +819,35 @@ func langLabel(code string) string {
 		return "简体中文"
 	default:
 		return "跟随系统"
+	}
+}
+
+func intervalLabel(sec int) string {
+	switch sec {
+	case 60:
+		return "每 1 分钟"
+	case 300:
+		return "每 5 分钟"
+	case 900:
+		return "每 15 分钟"
+	case 1800:
+		return "每 30 分钟"
+	default:
+		return "手动刷新"
+	}
+}
+
+func intervalFromLabel(s string) int {
+	switch s {
+	case "每 1 分钟":
+		return 60
+	case "每 5 分钟":
+		return 300
+	case "每 15 分钟":
+		return 900
+	case "每 30 分钟":
+		return 1800
+	default:
+		return 0
 	}
 }

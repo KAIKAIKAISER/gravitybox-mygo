@@ -50,3 +50,6 @@ func FindLanguageServerProcesses(context.Context) ([]LanguageServerProc, error) 
 func StopAntigravityGracefully(context.Context) error {
 	return errors.New("StopAntigravityGracefully only supported on Windows")
 }
+func SetLaunchAtLogin(bool) error { return nil }
+func OpenInExplorer(string) error { return nil }
+func OpenExternalURL(string) error { return nil }

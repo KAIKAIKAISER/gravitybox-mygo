@@ -10,8 +10,10 @@ import (
 	"fmt"
 	"io"
 	"maps"
+	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -632,4 +634,207 @@ func copyFile(src, dst string) error {
 		return err
 	}
 	return out.Sync()
+}
+
+// ZhPackInfo describes the active zh-pack metadata for the Deep Localization page.
+type ZhPackInfo struct {
+	AppVersion   string
+	EntriesCount int
+	UpdatedAt    string
+	Source       string
+}
+
+// GetZhPackInfo returns metadata for the currently active zh-pack (remote-synced or bundled).
+func GetZhPackInfo(stateDir string) ZhPackInfo {
+	source := "KAIKAIKAISER/antigravity-zh-asar"
+	if stateDir != "" {
+		if raw, err := os.ReadFile(filepath.Join(stateDir, "zh-pack-latest.json")); err == nil {
+			var p ZhPackSpec
+			if json.Unmarshal(raw, &p) == nil && p.Schema == 1 && len(p.Entries) > 0 {
+				cnt := p.EntriesCount
+				if cnt == 0 {
+					cnt = len(p.Entries)
+				}
+				return ZhPackInfo{
+					AppVersion:   p.AppVersion,
+					EntriesCount: cnt,
+					UpdatedAt:    formatPackTime(p.UpdatedAt),
+					Source:       source,
+				}
+			}
+		}
+	}
+	pack, err := LoadZhPack("")
+	if err != nil {
+		return ZhPackInfo{Source: source}
+	}
+	cnt := pack.EntriesCount
+	if cnt == 0 {
+		cnt = len(pack.Entries)
+	}
+	return ZhPackInfo{
+		AppVersion:   pack.AppVersion,
+		EntriesCount: cnt,
+		UpdatedAt:    formatPackTime(pack.UpdatedAt),
+		Source:       source,
+	}
+}
+
+func formatPackTime(iso string) string {
+	t, err := time.Parse(time.RFC3339, iso)
+	if err != nil {
+		t, err = time.Parse(time.RFC3339Nano, iso)
+		if err != nil {
+			return iso
+		}
+	}
+	return t.Local().Format("01-02 15:04")
+}
+
+// SyncRemoteZhPack downloads and validates zh-pack.json from KAIKAIKAISER/antigravity-zh-asar.
+func SyncRemoteZhPack(ctx context.Context, stateDir string) (string, error) {
+	if stateDir == "" {
+		return "", errors.New("stateDir is empty")
+	}
+	urls := []string{
+		"https://github.com/KAIKAIKAISER/antigravity-zh-asar/releases/latest/download/zh-pack.json",
+		"https://raw.githubusercontent.com/KAIKAIKAISER/antigravity-zh-asar/main/zh-pack.json",
+	}
+	client := &http.Client{Timeout: 20 * time.Second}
+	for _, u := range urls {
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
+		if err != nil {
+			continue
+		}
+		resp, err := client.Do(req)
+		if err != nil {
+			continue
+		}
+		raw, err := io.ReadAll(io.LimitReader(resp.Body, 16*1024*1024))
+		_ = resp.Body.Close()
+		if err != nil || resp.StatusCode != http.StatusOK {
+			continue
+		}
+		var pack ZhPackSpec
+		if json.Unmarshal(raw, &pack) != nil || pack.Schema != 1 || len(pack.Entries) == 0 || !strings.Contains(pack.RuntimeTemplate, "{{MAP_JSON}}") {
+			continue
+		}
+		if err := os.MkdirAll(stateDir, 0o700); err != nil {
+			return "", err
+		}
+		if err := os.WriteFile(filepath.Join(stateDir, "zh-pack-latest.json"), raw, 0o600); err != nil {
+			return "", err
+		}
+		cnt := pack.EntriesCount
+		if cnt == 0 {
+			cnt = len(pack.Entries)
+		}
+		return fmt.Sprintf("已同步最新汉化包 (v%s, %d 条)", pack.AppVersion, cnt), nil
+	}
+	return "", errors.New("无法从 GitHub 拉取最新 zh-pack.json，请检查网络连接")
+}
+
+var jsQuotedStringRe = regexp.MustCompile(`"([A-Za-z][A-Za-z0-9 ,.:;!?/'()\-]{2,120})"`)
+
+// ScanResult holds untranslated UI strings discovered in the current Antigravity app.asar.
+type ScanResult struct {
+	AppVersion  string
+	Pending     []string
+	ReportPath  string
+	TotalFound  int
+}
+
+// ScanUntranslatedStrings extracts English UI literals from app.asar (preferring app.asar.bak) and diffs against zh-pack.
+func ScanUntranslatedStrings(appDir, stateDir string) (ScanResult, error) {
+	st := InspectApp(appDir)
+	if !st.AppFound {
+		return ScanResult{}, errors.New("未找到 Antigravity app.asar")
+	}
+	pack, err := LoadZhPack(stateDir)
+	if err != nil {
+		return ScanResult{}, err
+	}
+	known := make(map[string]bool, len(pack.Entries)+len(pack.Whitelist))
+	for k := range pack.Entries {
+		known[strings.ToLower(strings.TrimSpace(k))] = true
+	}
+	for _, w := range pack.Whitelist {
+		known[strings.ToLower(strings.TrimSpace(w))] = true
+	}
+
+	scanPath := st.AsarPath
+	if st.HasBackup {
+		scanPath = st.AsarPath + ".bak"
+	}
+	arc, err := Open(scanPath)
+	if err != nil {
+		return ScanResult{}, err
+	}
+	defer arc.Close()
+
+	var jsFiles []string
+	var collect func(files map[string]Entry, prefix string)
+	collect = func(files map[string]Entry, prefix string) {
+		for name, entry := range files {
+			p := name
+			if prefix != "" {
+				p = prefix + "/" + name
+			}
+			if entry.Files != nil {
+				collect(entry.Files, p)
+			} else if strings.HasPrefix(p, "dist/") && strings.HasSuffix(p, ".js") && !strings.Contains(p, "zh_translator_runtime") {
+				jsFiles = append(jsFiles, p)
+			}
+		}
+	}
+	collect(arc.Header.Files, "")
+
+	seen := map[string]bool{}
+	var pending []string
+	for _, rel := range jsFiles {
+		raw, err := arc.ReadEntry(rel, 6*1024*1024)
+		if err != nil {
+			continue
+		}
+		matches := jsQuotedStringRe.FindAllStringSubmatch(string(raw), -1)
+		for _, m := range matches {
+			s := strings.TrimSpace(m[1])
+			low := strings.ToLower(s)
+			if known[low] || seen[s] || !strings.Contains(s, " ") {
+				continue
+			}
+			if strings.Contains(s, "http") || strings.Contains(s, "://") || strings.HasPrefix(s, "text-") || strings.HasPrefix(s, "bg-") {
+				continue
+			}
+			seen[s] = true
+			pending = append(pending, s)
+			if len(pending) >= 300 {
+				break
+			}
+		}
+		if len(pending) >= 300 {
+			break
+		}
+	}
+	sort.Strings(pending)
+
+	reportPath := ""
+	if stateDir != "" {
+		reportsDir := filepath.Join(stateDir, "reports")
+		_ = os.MkdirAll(reportsDir, 0o700)
+		reportPath = filepath.Join(reportsDir, fmt.Sprintf("pending-%s.json", st.AppVersion))
+		payload, _ := json.MarshalIndent(map[string]any{
+			"appVersion": st.AppVersion,
+			"count":      len(pending),
+			"pending":    pending,
+		}, "", "  ")
+		_ = os.WriteFile(reportPath, payload, 0o600)
+	}
+
+	return ScanResult{
+		AppVersion: st.AppVersion,
+		Pending:    pending,
+		ReportPath: reportPath,
+		TotalFound: len(pending),
+	}, nil
 }

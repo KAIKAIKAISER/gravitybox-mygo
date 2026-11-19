@@ -10,22 +10,32 @@ import (
 
 // Config stores persistent GravityBox user preferences in %APPDATA%\GravityBox\config.json.
 type Config struct {
-	AppLanguage        string `json:"appLanguage"`        // "system", "zh-Hans", "en"
-	TranslationEnabled bool   `json:"translationEnabled"` // IDE runtime / ASAR translation toggle
-	HudEnabled         bool   `json:"hudEnabled"`         // Conversation HUD toggle
-	StartInTray        bool   `json:"startInTray"`
-	AppPath            string `json:"appPath,omitempty"` // Optional override for Antigravity install root
-	DebugPort          int    `json:"debugPort"`         // Default 9222
+	AppLanguage          string `json:"appLanguage"`          // "system", "zh-Hans", "en"
+	TranslationEnabled   bool   `json:"translationEnabled"`   // IDE runtime / ASAR translation toggle
+	HudEnabled           bool   `json:"hudEnabled"`           // Conversation HUD toggle
+	StartInTray          bool   `json:"startInTray"`
+	LaunchAtLogin        bool   `json:"launchAtLogin"`
+	FollowAntigravity    bool   `json:"followAntigravity"`
+	QuotaRefreshInterval int    `json:"quotaRefreshInterval"` // seconds; 0 = manual
+	AutoPricingSync      bool   `json:"autoPricingSync"`
+	AutoCheckUpdates     bool   `json:"autoCheckUpdates"`
+	AppPath              string `json:"appPath,omitempty"`
+	DebugPort            int    `json:"debugPort"`
 }
 
-// DefaultConfig returns sensible defaults aligned with GravityBox v1.2.0.
+// DefaultConfig returns sensible defaults aligned with GravityBox.
 func DefaultConfig() Config {
 	return Config{
-		AppLanguage:        "system",
-		TranslationEnabled: true,
-		HudEnabled:         true,
-		StartInTray:        false,
-		DebugPort:          9222,
+		AppLanguage:          "system",
+		TranslationEnabled:   true,
+		HudEnabled:           true,
+		StartInTray:          false,
+		LaunchAtLogin:        false,
+		FollowAntigravity:    false,
+		QuotaRefreshInterval: 0,
+		AutoPricingSync:      false,
+		AutoCheckUpdates:     true,
+		DebugPort:            9222,
 	}
 }
 
@@ -139,6 +149,21 @@ func Load() Config {
 	}
 	if v, ok := parsed["startInTray"].(bool); ok {
 		cfg.StartInTray = v
+	}
+	if v, ok := parsed["launchAtLogin"].(bool); ok {
+		cfg.LaunchAtLogin = v
+	}
+	if v, ok := parsed["followAntigravity"].(bool); ok {
+		cfg.FollowAntigravity = v
+	}
+	if v, ok := parsed["quotaRefreshInterval"].(float64); ok && v >= 0 {
+		cfg.QuotaRefreshInterval = int(v)
+	}
+	if v, ok := parsed["autoPricingSync"].(bool); ok {
+		cfg.AutoPricingSync = v
+	}
+	if v, ok := parsed["autoCheckUpdates"].(bool); ok {
+		cfg.AutoCheckUpdates = v
 	}
 	if v, ok := parsed["appPath"].(string); ok {
 		cfg.AppPath = v

@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"strconv"
@@ -16,6 +17,7 @@ import (
 	"unsafe"
 
 	"golang.org/x/sys/windows"
+	"golang.org/x/sys/windows/registry"
 )
 
 var (
@@ -304,4 +306,44 @@ func StopAntigravityGracefully(ctx context.Context) error {
 	fcmd := exec.CommandContext(cctx, "taskkill.exe", "/F", "/IM", "Antigravity.exe")
 	fcmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
 	return fcmd.Run()
+}
+
+const runRegPath = `Software\Microsoft\Windows\CurrentVersion\Run`
+
+// SetLaunchAtLogin registers or removes GravityBox from HKCU Run startup.
+func SetLaunchAtLogin(enabled bool) error {
+	k, _, err := registry.CreateKey(registry.CURRENT_USER, runRegPath, registry.SET_VALUE|registry.QUERY_VALUE)
+	if err != nil {
+		return err
+	}
+	defer k.Close()
+
+	if !enabled {
+		err := k.DeleteValue("GravityBox")
+		if errors.Is(err, registry.ErrNotExist) {
+			return nil
+		}
+		return err
+	}
+	exe, err := os.Executable()
+	if err != nil {
+		return err
+	}
+	return k.SetStringValue("GravityBox", fmt.Sprintf(`"%s"`, exe))
+}
+
+// OpenInExplorer opens a folder in Windows Explorer.
+func OpenInExplorer(path string) error {
+	cmd := exec.Command("explorer.exe", path)
+	return cmd.Start()
+}
+
+// OpenExternalURL opens an https:// URL in the default Windows browser.
+func OpenExternalURL(rawURL string) error {
+	if !strings.HasPrefix(rawURL, "https://") && !strings.HasPrefix(rawURL, "http://") {
+		return errors.New("unsupported URL scheme")
+	}
+	cmd := exec.Command("rundll32.exe", "url.dll,FileProtocolHandler", rawURL)
+	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
+	return cmd.Start()
 }
