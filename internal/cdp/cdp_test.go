@@ -46,3 +46,14 @@ func TestBuildRuntimeBundle(t *testing.T) {
 		t.Fatal("expected ESM imports to be stripped from classic runtime bundle")
 	}
 }
+
+func TestNewControllerLoadsDictionary(t *testing.T) {
+	ctrl, err := NewController(9222, "zh-Hans", true, true)
+	if err != nil {
+		t.Fatalf("NewController failed: %v", err)
+	}
+	st := ctrl.Status()
+	if st.DictionaryEntries < 1000 {
+		t.Fatalf("expected >1000 dictionary entries, got %d", st.DictionaryEntries)
+	}
+}

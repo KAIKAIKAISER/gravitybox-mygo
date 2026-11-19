@@ -67,11 +67,18 @@ func NewController(debugPort int, locale string, translationEnabled, hudEnabled 
 	if err != nil {
 		return nil, err
 	}
-	var dictMeta struct {
-		Version string            `json:"version"`
-		Entries map[string]string `json:"entries"`
+	var entries map[string]string
+	if err := json.Unmarshal(dictRaw, &entries); err != nil {
+		return nil, err
 	}
-	_ = json.Unmarshal(dictRaw, &dictMeta)
+	dictPayload, err := json.Marshal(map[string]any{
+		"schema":  1,
+		"version": "base",
+		"entries": entries,
+	})
+	if err != nil {
+		return nil, err
+	}
 
 	sum := sha256.Sum256([]byte(bundle))
 	return &Controller{
@@ -81,14 +88,14 @@ func NewController(debugPort int, locale string, translationEnabled, hudEnabled 
 		hudEnabled:         hudEnabled,
 		bundleJS:           bundle,
 		runtimeID:          hex.EncodeToString(sum[:]),
-		dictJSON:           dictRaw,
-		dictVer:            dictMeta.Version,
-		dictCount:          len(dictMeta.Entries),
+		dictJSON:           dictPayload,
+		dictVer:            "base",
+		dictCount:          len(entries),
 		sessions:           make(map[string]*attachedSession),
 		lastStatus: ControllerStatus{
 			Mode:              "waiting",
-			DictionaryVersion: dictMeta.Version,
-			DictionaryEntries: len(dictMeta.Entries),
+			DictionaryVersion: "base",
+			DictionaryEntries: len(entries),
 		},
 	}, nil
 }

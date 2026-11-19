@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"regexp"
+	"sort"
 	"strings"
 	"time"
 
@@ -17,16 +18,24 @@ import (
 
 var csrfTokenRe = regexp.MustCompile(`(?:^|\s)--csrf_token(?:=|\s+)([^\s"]+)`)
 
+// QuotaWindow represents one displayable quota bar (e.g. "Gemini · 5 小时").
+type QuotaWindow struct {
+	Label          string
+	IconKey        string // "gemini", "claude", "openai"
+	RemainingPct   float64
+	ResetCountdown string
+}
+
 // FamilyQuota summarizes remaining quota for a model family.
 type FamilyQuota struct {
-	Family          string
-	RemainingPct    float64
-	HasFiveHour     bool
-	FiveHourPct     float64
-	FiveHourReset   string
-	HasWeekly       bool
-	WeeklyPct       float64
-	WeeklyReset     string
+	Family        string
+	RemainingPct  float64
+	HasFiveHour   bool
+	FiveHourPct   float64
+	FiveHourReset string
+	HasWeekly     bool
+	WeeklyPct     float64
+	WeeklyReset   string
 }
 
 // LiveStatus represents live quota and active user info probed from Antigravity's Language Server.
@@ -36,6 +45,7 @@ type LiveStatus struct {
 	Name      string
 	Tier      string
 	Families  []FamilyQuota
+	Windows   []QuotaWindow
 	Error     string
 	ProbedAt  time.Time
 }
@@ -113,16 +123,88 @@ func probePort(ctx context.Context, port int, csrf string) (LiveStatus, bool) {
 			ProbedAt:  time.Now(),
 		}
 
-		// Also try RetrieveUserQuotaSummary for 5h / weekly buckets.
 		if summaryRaw, err := localRPC(ctx, scheme, port, "/exa.language_server_pb.LanguageServerService/RetrieveUserQuotaSummary", csrf, `{}`); err == nil {
 			st.Families = parseQuotaSummary(summaryRaw)
 		}
 		if len(st.Families) == 0 {
 			st.Families = parseClientModelQuotas(parsed.UserStatus.CascadeModelConfigData.ClientModelConfigs)
 		}
+		st.Windows = buildQuotaWindows(st.Families)
 		return st, true
 	}
 	return LiveStatus{}, false
+}
+
+func buildQuotaWindows(families []FamilyQuota) []QuotaWindow {
+	var out []QuotaWindow
+	for _, f := range families {
+		icon := "gemini"
+		low := strings.ToLower(f.Family)
+		if strings.Contains(low, "claude") || strings.Contains(low, "gpt") {
+			icon = "claude"
+		} else if strings.Contains(low, "openai") {
+			icon = "openai"
+		}
+		if f.HasFiveHour {
+			out = append(out, QuotaWindow{
+				Label:          f.Family + " · 5 小时",
+				IconKey:        icon,
+				RemainingPct:   f.FiveHourPct,
+				ResetCountdown: FormatCountdown(f.FiveHourReset),
+			})
+		}
+		if f.HasWeekly {
+			out = append(out, QuotaWindow{
+				Label:          f.Family + " · 每周",
+				IconKey:        icon,
+				RemainingPct:   f.WeeklyPct,
+				ResetCountdown: FormatCountdown(f.WeeklyReset),
+			})
+		}
+		if !f.HasFiveHour && !f.HasWeekly {
+			out = append(out, QuotaWindow{
+				Label:        f.Family,
+				IconKey:      icon,
+				RemainingPct: f.RemainingPct,
+			})
+		}
+	}
+	return out
+}
+
+// FormatCountdown formats an RFC3339 timestamp into Chinese relative countdown text.
+func FormatCountdown(resetTime string) string {
+	if strings.TrimSpace(resetTime) == "" {
+		return ""
+	}
+	t, err := time.Parse(time.RFC3339, resetTime)
+	if err != nil {
+		t, err = time.Parse(time.RFC3339Nano, resetTime)
+		if err != nil {
+			return ""
+		}
+	}
+	diff := time.Until(t)
+	if diff <= 0 {
+		return "即将重置"
+	}
+	totalMin := int(diff.Minutes())
+	days := totalMin / (24 * 60)
+	hours := (totalMin % (24 * 60)) / 60
+	mins := totalMin % 60
+	if days > 0 {
+		if hours > 0 {
+			return fmt.Sprintf("%d天 %d小时后重置", days, hours)
+		}
+		return fmt.Sprintf("%d天后重置", days)
+	}
+	if hours > 0 {
+		if mins > 0 {
+			return fmt.Sprintf("%d小时 %d分后重置", hours, mins)
+		}
+		return fmt.Sprintf("%d小时后重置", hours)
+	}
+	return fmt.Sprintf("%d分钟后重置", max(1, mins))
 }
 
 func localRPC(ctx context.Context, scheme string, port int, path, csrf, payload string) ([]byte, error) {
@@ -241,7 +323,11 @@ func parseClientModelQuotas(configs []struct {
 		ResetTime         string   `json:"resetTime"`
 	} `json:"quotaInfo"`
 }) []FamilyQuota {
-	minByFamily := map[string]float64{}
+	type agg struct {
+		pct   float64
+		reset string
+	}
+	byFam := map[string]agg{}
 	for _, c := range configs {
 		if c.QuotaInfo == nil || c.QuotaInfo.RemainingFraction == nil {
 			continue
@@ -250,15 +336,39 @@ func parseClientModelQuotas(configs []struct {
 		low := strings.ToLower(c.Label)
 		if strings.Contains(low, "claude") || strings.Contains(low, "gpt") {
 			fam = "Claude/GPT"
+		} else if strings.Contains(low, "argon") {
+			fam = "Gemini 4 Argon"
 		}
 		pct := *c.QuotaInfo.RemainingFraction * 100
-		if cur, ok := minByFamily[fam]; !ok || pct < cur {
-			minByFamily[fam] = pct
+		if cur, ok := byFam[fam]; !ok || pct < cur.pct {
+			byFam[fam] = agg{pct: pct, reset: c.QuotaInfo.ResetTime}
 		}
 	}
-	out := make([]FamilyQuota, 0, len(minByFamily))
-	for fam, pct := range minByFamily {
-		out = append(out, FamilyQuota{Family: fam, RemainingPct: pct})
+	order := []string{"Gemini", "Claude/GPT", "Gemini 4 Argon"}
+	var keys []string
+	for _, k := range order {
+		if _, ok := byFam[k]; ok {
+			keys = append(keys, k)
+		}
+	}
+	var extra []string
+	for k := range byFam {
+		if k != "Gemini" && k != "Claude/GPT" && k != "Gemini 4 Argon" {
+			extra = append(extra, k)
+		}
+	}
+	sort.Strings(extra)
+	keys = append(keys, extra...)
+	out := make([]FamilyQuota, 0, len(keys))
+	for _, k := range keys {
+		v := byFam[k]
+		out = append(out, FamilyQuota{
+			Family:       k,
+			RemainingPct: v.pct,
+			HasWeekly:    v.reset != "",
+			WeeklyPct:    v.pct,
+			WeeklyReset:  v.reset,
+		})
 	}
 	return out
 }
