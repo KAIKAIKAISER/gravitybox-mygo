@@ -1,0 +1,5 @@
+.mygo/
+build/
+*.exe
+*.db
+*.log
