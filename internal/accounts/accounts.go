@@ -117,8 +117,9 @@ func enrichAccountFromDisk(acc *SavedAccount) {
 			}
 			minPct := 100.0
 			for _, g := range detail.Quota.Groups {
+				gName := quota.NormalizeFamilyName(g.DisplayName)
 				icon := "gemini"
-				low := strings.ToLower(g.DisplayName)
+				low := strings.ToLower(gName)
 				if strings.Contains(low, "claude") || strings.Contains(low, "gpt") {
 					icon = "claude"
 				} else if strings.Contains(low, "openai") {
@@ -134,7 +135,7 @@ func enrichAccountFromDisk(acc *SavedAccount) {
 					if pct < minPct {
 						minPct = pct
 					}
-					winLabel := g.DisplayName
+					winLabel := gName
 					switch strings.ToLower(b.Window) {
 					case "5h", "five_hour":
 						winLabel += " · 5 小时"

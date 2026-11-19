@@ -21,11 +21,23 @@ import (
 )
 
 var (
-	advapi32       = windows.NewLazySystemDLL("advapi32.dll")
-	procCredReadW  = advapi32.NewProc("CredReadW")
-	procCredWriteW = advapi32.NewProc("CredWriteW")
-	procCredDelete = advapi32.NewProc("CredDeleteW")
-	procCredFree   = advapi32.NewProc("CredFree")
+	advapi32                = windows.NewLazySystemDLL("advapi32.dll")
+	procCredReadW           = advapi32.NewProc("CredReadW")
+	procCredWriteW          = advapi32.NewProc("CredWriteW")
+	procCredDelete          = advapi32.NewProc("CredDeleteW")
+	procCredFree            = advapi32.NewProc("CredFree")
+	user32                  = windows.NewLazySystemDLL("user32.dll")
+	procEnumWindows         = user32.NewProc("EnumWindows")
+	procGetWindowThreadPID  = user32.NewProc("GetWindowThreadProcessId")
+	procIsWindowVisible     = user32.NewProc("IsWindowVisible")
+	procShowWindow          = user32.NewProc("ShowWindow")
+	procSetForegroundWindow = user32.NewProc("SetForegroundWindow")
+	procPostMessageW        = user32.NewProc("PostMessageW")
+)
+
+const (
+	swRestore = 9
+	wmClose   = 0x0010
 )
 
 const (
@@ -238,14 +250,66 @@ func ListListeningPorts(ctx context.Context) ([]ListeningPort, error) {
 	return results, nil
 }
 
-// LaunchAntigravity starts Antigravity.exe with remote debugging enabled on the chosen loopback port.
+// LaunchAntigravity starts Antigravity.exe cleanly as a visible GUI application with remote debugging enabled.
 func LaunchAntigravity(exePath string, debugPort int) error {
 	if debugPort <= 0 {
 		debugPort = 9222
 	}
 	cmd := exec.Command(exePath, fmt.Sprintf("--remote-debugging-port=%d", debugPort))
-	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
+	cmd.Dir = filepath.Dir(exePath)
 	return cmd.Start()
+}
+
+// OpenAntigravity brings an already-running Antigravity window to the foreground, or launches Antigravity.exe if not running.
+func OpenAntigravity(exePath string, debugPort int) error {
+	if FocusRunningAntigravity() {
+		return nil
+	}
+	if exePath == "" {
+		return errors.New("未找到 Antigravity.exe")
+	}
+	return LaunchAntigravity(exePath, debugPort)
+}
+
+func antigravityPIDSet() map[uint32]bool {
+	procs, err := ListProcesses()
+	if err != nil {
+		return nil
+	}
+	pids := make(map[uint32]bool)
+	for _, p := range procs {
+		if strings.EqualFold(p.Name, "Antigravity.exe") ||
+			strings.EqualFold(filepath.Base(p.ExecutablePath), "Antigravity.exe") {
+			pids[p.PID] = true
+		}
+	}
+	return pids
+}
+
+// FocusRunningAntigravity restores and focuses any visible top-level Antigravity window.
+func FocusRunningAntigravity() bool {
+	pids := antigravityPIDSet()
+	if len(pids) == 0 {
+		return false
+	}
+	var activated bool
+	cb := syscall.NewCallback(func(hwnd uintptr, _ uintptr) uintptr {
+		var pid uint32
+		_, _, _ = procGetWindowThreadPID.Call(hwnd, uintptr(unsafe.Pointer(&pid)))
+		if !pids[pid] {
+			return 1
+		}
+		vis, _, _ := procIsWindowVisible.Call(hwnd)
+		if vis == 0 {
+			return 1
+		}
+		_, _, _ = procShowWindow.Call(hwnd, swRestore)
+		_, _, _ = procSetForegroundWindow.Call(hwnd)
+		activated = true
+		return 1
+	})
+	_, _, _ = procEnumWindows.Call(cb, 0)
+	return activated
 }
 
 // LanguageServerProc describes a running Antigravity language_server process.
@@ -288,24 +352,48 @@ func FindLanguageServerProcesses(ctx context.Context) ([]LanguageServerProc, err
 	return res, nil
 }
 
-// StopAntigravityGracefully asks Antigravity.exe windows to close cleanly before force-closing if needed.
+// StopAntigravityGracefully asks Antigravity.exe windows to close via WM_CLOSE before cleaning lingering child trees.
 func StopAntigravityGracefully(ctx context.Context) error {
-	cctx, cancel := context.WithTimeout(ctx, 5*time.Second)
-	defer cancel()
-	cmd := exec.CommandContext(cctx, "taskkill.exe", "/IM", "Antigravity.exe")
-	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
-	_ = cmd.Run()
+	pids := antigravityPIDSet()
+	if len(pids) == 0 {
+		return nil
+	}
+	cb := syscall.NewCallback(func(hwnd uintptr, _ uintptr) uintptr {
+		var pid uint32
+		_, _, _ = procGetWindowThreadPID.Call(hwnd, uintptr(unsafe.Pointer(&pid)))
+		if !pids[pid] {
+			return 1
+		}
+		vis, _, _ := procIsWindowVisible.Call(hwnd)
+		if vis != 0 {
+			_, _, _ = procPostMessageW.Call(hwnd, wmClose, 0, 0)
+		}
+		return 1
+	})
+	_, _, _ = procEnumWindows.Call(cb, 0)
 
-	deadline := time.Now().Add(3 * time.Second)
+	deadline := time.Now().Add(3500 * time.Millisecond)
 	for time.Now().Before(deadline) {
 		if !IsAntigravityRunning() {
 			return nil
 		}
-		time.Sleep(150 * time.Millisecond)
+		time.Sleep(120 * time.Millisecond)
 	}
-	fcmd := exec.CommandContext(cctx, "taskkill.exe", "/F", "/IM", "Antigravity.exe")
+
+	cctx, cancel := context.WithTimeout(ctx, 4*time.Second)
+	defer cancel()
+	fcmd := exec.CommandContext(cctx, "taskkill.exe", "/IM", "Antigravity.exe", "/T", "/F")
 	fcmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
-	return fcmd.Run()
+	_ = fcmd.Run()
+
+	cleanDeadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(cleanDeadline) {
+		if !IsAntigravityRunning() {
+			return nil
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	return nil
 }
 
 const runRegPath = `Software\Microsoft\Windows\CurrentVersion\Run`

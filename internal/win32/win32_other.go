@@ -44,6 +44,10 @@ func ListListeningPorts(context.Context) ([]ListeningPort, error) {
 func LaunchAntigravity(string, int) error {
 	return errors.New("LaunchAntigravity only supported on Windows")
 }
+func OpenAntigravity(string, int) error {
+	return errors.New("OpenAntigravity only supported on Windows")
+}
+func FocusRunningAntigravity() bool { return false }
 func FindLanguageServerProcesses(context.Context) ([]LanguageServerProc, error) {
 	return nil, nil
 }

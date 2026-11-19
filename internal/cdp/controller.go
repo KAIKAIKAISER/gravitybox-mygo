@@ -6,10 +6,14 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"net/url"
+	"os"
+	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 
+	"gravitybox-mygo/internal/config"
 	"gravitybox-mygo/resources"
 )
 
@@ -137,6 +141,14 @@ func (c *Controller) SyncOnce(ctx context.Context, appRunning bool) ControllerSt
 	}
 
 	targets, err := ListTargets(ctx, port)
+	if err != nil {
+		if activePort := readDevToolsActivePort(); activePort > 0 && activePort != port {
+			if t2, err2 := ListTargets(ctx, activePort); err2 == nil {
+				targets = t2
+				err = nil
+			}
+		}
+	}
 	if err != nil {
 		c.closeAllSessions()
 		return c.setStatus("debug-port-missing", "", 0, nil)
@@ -426,4 +438,21 @@ func isAllowedTarget(t Target) bool {
 func strconvQuote(s string) string {
 	b, _ := json.Marshal(s)
 	return string(b)
+}
+
+func readDevToolsActivePort() int {
+	p := filepath.Join(config.AntigravityUserDataDir(), "DevToolsActivePort")
+	raw, err := os.ReadFile(p)
+	if err != nil {
+		return 0
+	}
+	lines := strings.Split(strings.TrimSpace(string(raw)), "\n")
+	if len(lines) == 0 {
+		return 0
+	}
+	port, err := strconv.Atoi(strings.TrimSpace(lines[0]))
+	if err != nil || port <= 0 || port >= 65536 {
+		return 0
+	}
+	return port
 }

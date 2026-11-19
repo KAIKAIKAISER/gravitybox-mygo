@@ -1,9 +1,12 @@
 ﻿package ui
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"image"
+	"image/png"
 	"io"
 	"log"
 	"net/http"
@@ -15,6 +18,7 @@ import (
 
 	"github.com/egoist/mygo"
 	mygoui "github.com/egoist/mygo/ui"
+	"golang.org/x/image/draw"
 
 	"gravitybox-mygo/internal/accounts"
 	"gravitybox-mygo/internal/asar"
@@ -28,23 +32,28 @@ import (
 	"gravitybox-mygo/resources"
 )
 
-const appVersion = "1.2.3"
+const appVersion = "1.2.4"
 
 var (
-	svgOverview = mygoui.MustParseSVG([]byte(`<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg>`))
-	svgAccounts = mygoui.MustParseSVG([]byte(`<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>`))
-	svgUsage    = mygoui.MustParseSVG([]byte(`<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 20V10"/><path d="M12 20V4"/><path d="M6 20v-6"/></svg>`))
-	svgLocale   = mygoui.MustParseSVG([]byte(`<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m5 8 6 6"/><path d="m4 14 6-6 2-3"/><path d="M2 5h12"/><path d="M7 2h1"/><path d="m22 22-5-10-5 10"/><path d="M14 18h6"/></svg>`))
-	svgSettings = mygoui.MustParseSVG([]byte(`<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9c.26.6.77 1 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>`))
-	svgAbout    = mygoui.MustParseSVG([]byte(`<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>`))
-	svgSwitch   = mygoui.MustParseSVG([]byte(`<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m17 2 4 4-4 4"/><path d="M3 11v-1a4 4 0 0 1 4-4h14"/><path d="m7 22-4-4 4-4"/><path d="M21 13v1a4 4 0 0 1-4 4H3"/></svg>`))
-	svgRefresh  = mygoui.MustParseSVG([]byte(`<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/><path d="M8 16H3v5"/></svg>`))
-	svgGlobe    = mygoui.MustParseSVG([]byte(`<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg>`))
-	svgHud      = mygoui.MustParseSVG([]byte(`<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="M7 15h4"/><path d="M13 15h4"/></svg>`))
-	svgDollar   = mygoui.MustParseSVG([]byte(`<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="1" x2="12" y2="23"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg>`))
-	svgBolt     = mygoui.MustParseSVG([]byte(`<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>`))
-	svgLink     = mygoui.MustParseSVG([]byte(`<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>`))
-	svgStorage  = mygoui.MustParseSVG([]byte(`<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>`))
+	svgOverview    = mygoui.MustParseSVG([]byte(`<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg>`))
+	svgAccounts    = mygoui.MustParseSVG([]byte(`<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>`))
+	svgUsage       = mygoui.MustParseSVG([]byte(`<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 20V10"/><path d="M12 20V4"/><path d="M6 20v-6"/></svg>`))
+	svgLocale      = mygoui.MustParseSVG([]byte(`<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m5 8 6 6"/><path d="m4 14 6-6 2-3"/><path d="M2 5h12"/><path d="M7 2h1"/><path d="m22 22-5-10-5 10"/><path d="M14 18h6"/></svg>`))
+	svgSettings    = mygoui.MustParseSVG([]byte(`<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9c.26.6.77 1 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>`))
+	svgAbout       = mygoui.MustParseSVG([]byte(`<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>`))
+	svgSwitch      = mygoui.MustParseSVG([]byte(`<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m17 2 4 4-4 4"/><path d="M3 11v-1a4 4 0 0 1 4-4h14"/><path d="m7 22-4-4 4-4"/><path d="M21 13v1a4 4 0 0 1-4 4H3"/></svg>`))
+	svgRefresh     = mygoui.MustParseSVG([]byte(`<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/><path d="M8 16H3v5"/></svg>`))
+	svgGlobe       = mygoui.MustParseSVG([]byte(`<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg>`))
+	svgHud         = mygoui.MustParseSVG([]byte(`<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="M7 15h4"/><path d="M13 15h4"/></svg>`))
+	svgDollar      = mygoui.MustParseSVG([]byte(`<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="1" x2="12" y2="23"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg>`))
+	svgBolt        = mygoui.MustParseSVG([]byte(`<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>`))
+	svgLink        = mygoui.MustParseSVG([]byte(`<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>`))
+	svgStorage     = mygoui.MustParseSVG([]byte(`<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>`))
+	svgChevronUp   = mygoui.MustParseSVG([]byte(`<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m18 15-6-6-6 6"/></svg>`))
+	svgChevronDown = mygoui.MustParseSVG([]byte(`<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>`))
+	svgGemini      = mygoui.MustParseSVG([]byte(`<svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 2c.4 4.9 4.1 8.6 9 9-4.9.4-8.6 4.1-9 9-.4-4.9-4.1-8.6-9-9 4.9-.4 8.6-4.1 9-9Z"/></svg>`))
+	svgClaude      = mygoui.MustParseSVG([]byte(`<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><line x1="12" y1="3" x2="12" y2="21"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="5.6" y1="5.6" x2="18.4" y2="18.4"/><line x1="18.4" y1="5.6" x2="5.6" y2="18.4"/></svg>`))
+	svgOpenAI      = mygoui.MustParseSVG([]byte(`<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="8"/><circle cx="12" cy="12" r="3"/></svg>`))
 )
 
 type navItem struct {
@@ -77,6 +86,8 @@ type App struct {
 	cfg              config.Config
 	autoSwitch       accounts.AutoSwitchConfig
 	activeNav        string
+	popoverTab       int    // 0: 用量, 1: 配额, 2: 账号
+	popoverPeriod    int    // 0: 今日, 1: 近 7 天, 2: 近 30 天, 3: 全部
 	selectedLang     string
 	selectedInterval string
 	usagePeriod      int    // 0: 今日, 1: 近 7 天, 2: 近 30 天, 3: 全部
@@ -102,6 +113,7 @@ type App struct {
 	cdpStatus          cdp.ControllerStatus
 	liveQuota          quota.LiveStatus
 	usageSummary       usage.Summary
+	popoverUsage       usage.Summary
 	currentAccountID   string
 	savedAccounts      []accounts.SavedAccount
 	lastProbeAt        time.Time
@@ -145,6 +157,7 @@ func Run() error {
 		cfg:                  cfg,
 		autoSwitch:           asCfg,
 		activeNav:            "overview",
+		popoverTab:           1, // 配额 / 总览直观展示
 		selectedLang:         langLabel(cfg.AppLanguage),
 		selectedInterval:     intervalLabel(cfg.QuotaRefreshInterval),
 		usageAcctFilter:      "全部账号",
@@ -186,13 +199,28 @@ func (a *App) loadBitmaps() {
 	}
 }
 
+func makeCrispTrayIcon(raw []byte) []byte {
+	src, err := png.Decode(bytes.NewReader(raw))
+	if err != nil {
+		return raw
+	}
+	dst := image.NewNRGBA(image.Rect(0, 0, 64, 64))
+	draw.CatmullRom.Scale(dst, dst.Bounds(), src, src.Bounds(), draw.Over, nil)
+	var out bytes.Buffer
+	if err := png.Encode(&out, dst); err != nil {
+		return raw
+	}
+	return out.Bytes()
+}
+
 func (a *App) onReady() {
 	a.loadBitmaps()
 	iconBytes, _ := resources.ReadFile("icon.png")
+	trayBytes := makeCrispTrayIcon(iconBytes)
 
 	var err error
 	a.tray, err = mygo.NewTray(mygo.TrayOptions{
-		Icon:    iconBytes,
+		Icon:    trayBytes,
 		ToolTip: "GravityBox",
 	})
 	if err != nil {
@@ -217,8 +245,8 @@ func (a *App) onReady() {
 
 	a.popoverWin = mygo.NewWindow(mygo.WindowOptions{
 		Title:             "GravityBox",
-		Width:             380,
-		Height:            430,
+		Width:             388,
+		Height:            520,
 		Hidden:            true,
 		Frameless:         true,
 		DisableResize:     true,
@@ -321,12 +349,15 @@ func (a *App) refreshAsync() {
 		}
 		uCtx, uCancel := context.WithTimeout(context.Background(), 3*time.Second)
 		uSum := usage.LoadSummary(uCtx, a.usagePeriod, acctFilter)
+		popSum := uSum
+		if a.popoverPeriod != a.usagePeriod || acctFilter != "all" {
+			popSum = usage.LoadSummary(uCtx, a.popoverPeriod, "all")
+		}
 		uCancel()
 
 		curID, savedList, _ := accounts.ListSaved()
 		items, total := maintenance.ScanSafeCaches()
 
-		// Follow Antigravity exit when enabled
 		if a.cfg.FollowAntigravity {
 			if running {
 				a.sawRunning = true
@@ -344,6 +375,7 @@ func (a *App) refreshAsync() {
 			a.cdpStatus = cdpSt
 			a.liveQuota = liveQ
 			a.usageSummary = uSum
+			a.popoverUsage = popSum
 			a.currentAccountID = curID
 			a.savedAccounts = savedList
 			a.cacheItems = items
@@ -403,23 +435,21 @@ func (a *App) togglePopover() {
 		a.popoverWin.SetPosition(x, y)
 	}
 	a.popoverWin.Show()
+	a.refreshAsync()
 }
 
 func (a *App) launchAntigravity() {
 	dir := config.DetectAntigravityInstallDir(a.cfg.AppPath)
-	if dir == "" {
-		a.statusNotice = "未找到 Antigravity 安装目录"
+	exe := ""
+	if dir != "" {
+		exe = filepath.Join(dir, "Antigravity.exe")
+	}
+	if err := win32.OpenAntigravity(exe, a.cfg.DebugPort); err != nil {
+		a.statusNotice = fmt.Sprintf("唤起 Antigravity 失败: %v", err)
 		a.invalidateVisible()
 		return
 	}
-	exe := filepath.Join(dir, "Antigravity.exe")
-	if err := win32.LaunchAntigravity(exe, a.cfg.DebugPort); err != nil {
-		a.statusNotice = fmt.Sprintf("启动失败: %v", err)
-		a.invalidateVisible()
-		return
-	}
-	a.statusNotice = fmt.Sprintf("已启动 Antigravity (调试端口 %d)", a.cfg.DebugPort)
-	a.invalidateVisible()
+	a.statusNotice = ""
 	a.refreshAsync()
 }
 
@@ -435,6 +465,7 @@ func (a *App) safeRelaunchAsync() {
 		_ = win32.StopAntigravityGracefully(ctx)
 		cancel()
 
+		time.Sleep(450 * time.Millisecond)
 		dir := config.DetectAntigravityInstallDir(a.cfg.AppPath)
 		var msg string
 		if dir == "" {
@@ -646,45 +677,129 @@ func (a *App) saveConfig() {
 	a.refreshAsync()
 }
 
+func (a *App) pageCanvasColor(t *mygoui.Theme) mygoui.Color {
+	if t.Dark {
+		return mygoui.RGB(20, 22, 27)
+	}
+	return mygoui.RGB(245, 246, 248)
+}
+
 func (a *App) popoverView(c *mygoui.Context) {
 	if c.Shortcut(0, mygoui.KeyEscape) {
 		a.popoverWin.Hide()
 	}
 	t := c.Theme()
-	mygoui.Column(c).Fill().Padding(16).Gap(10).Background(t.Background).Border(1, t.Border).Children(func() {
+	bg := a.pageCanvasColor(t)
+	cardBg := mygoui.RGB(255, 255, 255)
+	if t.Dark {
+		cardBg = mygoui.RGB(30, 34, 43)
+	}
+
+	mygoui.Column(c).Fill().Padding(14).Gap(10).Background(bg).Border(1, t.Border).Children(func() {
+		// Header
 		mygoui.Row(c).Gap(8).AlignItems(mygoui.Center).Children(func() {
 			if a.logoBmp != nil {
-				mygoui.Image(c, a.logoBmp).Size(20, 20).Fit(mygoui.Contain).Radius(4)
+				mygoui.Image(c, a.logoBmp).Size(20, 20).Fit(mygoui.Contain).Radius(5)
 			}
-			mygoui.Text(c, "GravityBox").FontSize(15).Bold().Grow(1)
-			mygoui.Badge(c, a.sidebarStatusText())
+			mygoui.Text(c, "GravityBox").FontSize(14).Bold().NoWrap().Grow(1)
+			a.pillBadge(c, a.sidebarStatusText(), mygoui.RGBA(15, 23, 42, 0.06), t.TextMuted)
 		})
-		if a.liveQuota.Connected {
-			mygoui.Row(c).Gap(6).AlignItems(mygoui.Center).Children(func() {
-				mygoui.Text(c, a.liveQuota.Email).FontSize(12).TextColor(t.TextMuted).Grow(1)
-				mygoui.Badge(c, a.liveQuota.Tier)
-			})
-			for _, w := range a.liveQuota.Windows {
-				a.quotaBarRow(c, w)
-			}
+
+		// 3-tab selector matching upstream popover
+		if mygoui.Segmented(c, &a.popoverTab, "用量", "配额", "账号").FillEqually().Label("面板分页").Changed() {
+			a.refreshAsync()
 		}
-		mygoui.Divider(c)
-		mygoui.Row(c).Gap(10).AlignItems(mygoui.Center).Children(func() {
-			mygoui.Text(c, "IDE 中文翻译").Grow(1)
-			if mygoui.Switch(c, &a.cfg.TranslationEnabled).Label("IDE 中文翻译").Changed() {
-				a.saveConfig()
-			}
+
+		// Scrollable middle pane so footer never clips!
+		mygoui.Scroll(c).Grow(1).FillWidth().Children(func() {
+			mygoui.Column(c).FillWidth().Gap(10).Children(func() {
+				switch a.popoverTab {
+				case 0:
+					if mygoui.Segmented(c, &a.popoverPeriod, "今日", "近 7 天", "近 30 天", "全部").FillEqually().Label("周期").Changed() {
+						a.refreshAsync()
+					}
+					mygoui.Grid(c).Columns(2).Gap(8).Children(func() {
+						a.miniTile(c, cardBg, "Token 用量", usage.FormatTokens(a.popoverUsage.PeriodTokens))
+						a.miniTile(c, cardBg, "请求数", fmt.Sprintf("%d", a.popoverUsage.PeriodRequests))
+						a.miniTile(c, cardBg, "API 费用估算", usage.FormatUSD(a.popoverUsage.PeriodUSD))
+						a.miniTile(c, cardBg, "缓存命中率", fmt.Sprintf("%.1f%%", a.popoverUsage.CacheHitRate))
+					})
+					if len(a.popoverUsage.Models) > 0 {
+						mygoui.Column(c).Padding(10, 12).Gap(6).Radius(10).Background(cardBg).Border(1, t.Border).Children(func() {
+							limit := min(3, len(a.popoverUsage.Models))
+							for i := 0; i < limit; i++ {
+								m := a.popoverUsage.Models[i]
+								mygoui.Row(c.Key("pm-"+m.Model)).Gap(6).AlignItems(mygoui.Center).Children(func() {
+									mygoui.Text(c, m.Model).FontSize(12).Bold().NoWrap().Grow(1)
+									mygoui.Text(c, usage.FormatTokens(m.TotalTokens)).FontSize(12).TextColor(t.TextMuted).NoWrap()
+								})
+							}
+						})
+					}
+				case 1:
+					if a.liveQuota.Connected {
+						mygoui.Row(c).Gap(6).AlignItems(mygoui.Center).Children(func() {
+							mygoui.Text(c, a.liveQuota.Email).FontSize(12).TextColor(t.TextMuted).NoWrap().Grow(1)
+							if a.liveQuota.Tier != "" {
+								a.pillBadge(c, a.liveQuota.Tier, mygoui.RGBA(37, 99, 235, 0.12), mygoui.RGB(37, 99, 235))
+							}
+						})
+						mygoui.Column(c).Padding(10, 12).Gap(10).Radius(10).Background(cardBg).Border(1, t.Border).Children(func() {
+							for _, w := range a.liveQuota.Windows {
+								a.quotaBarRow(c, w)
+							}
+						})
+					} else {
+						mygoui.Column(c).Padding(12).Radius(10).Background(cardBg).Border(1, t.Border).Children(func() {
+							mygoui.Text(c, "启动并登录 Antigravity 后将显示实时配额").FontSize(12).TextColor(t.TextMuted)
+						})
+					}
+					mygoui.Column(c).Padding(10, 12).Gap(8).Radius(10).Background(cardBg).Border(1, t.Border).Children(func() {
+						mygoui.Row(c).Gap(10).AlignItems(mygoui.Center).Children(func() {
+							mygoui.Text(c, "IDE 中文翻译").FontSize(12).Grow(1)
+							if mygoui.Switch(c, &a.cfg.TranslationEnabled).Label("IDE 中文翻译").Changed() {
+								a.saveConfig()
+							}
+						})
+						mygoui.Row(c).Gap(10).AlignItems(mygoui.Center).Children(func() {
+							mygoui.Text(c, "对话状态栏").FontSize(12).Grow(1)
+							if mygoui.Switch(c, &a.cfg.HudEnabled).Label("对话状态栏").Changed() {
+								a.saveConfig()
+							}
+						})
+					})
+				case 2:
+					if len(a.savedAccounts) == 0 {
+						mygoui.Column(c).Padding(12).Radius(10).Background(cardBg).Border(1, t.Border).Children(func() {
+							mygoui.Text(c, "暂无已保存账号快照，请在主界面「账号」页保存。").FontSize(12).TextColor(t.TextMuted)
+						})
+					} else {
+						for _, acc := range a.savedAccounts {
+							acc := acc
+							isCur := a.liveQuota.Connected && acc.Email == a.liveQuota.Email
+							mygoui.Row(c.Key("pop-acc-"+acc.Email)).Padding(9, 12).Gap(8).Radius(10).
+								Background(cardBg).Border(1, t.Border).AlignItems(mygoui.Center).Children(func() {
+								mygoui.Column(c).Grow(1).Gap(1).Children(func() {
+									mygoui.Text(c, acc.Email).FontSize(12).Bold().NoWrap()
+									if acc.SubscriptionTier != "" {
+										mygoui.Text(c, acc.SubscriptionTier).FontSize(11).TextColor(t.TextMuted)
+									}
+								})
+								if isCur {
+									a.pillBadge(c, "当前", mygoui.RGBA(37, 99, 235, 0.12), mygoui.RGB(37, 99, 235))
+								} else if mygoui.Button(c, "切换").Disabled(a.acctBusy.Load()).Clicked() {
+									a.switchAccountAsync(acc.Email)
+								}
+							})
+						}
+					}
+				}
+			})
 		})
-		mygoui.Row(c).Gap(10).AlignItems(mygoui.Center).Children(func() {
-			mygoui.Text(c, "对话状态栏").Grow(1)
-			if mygoui.Switch(c, &a.cfg.HudEnabled).Label("对话状态栏").Changed() {
-				a.saveConfig()
-			}
-		})
+
+		// Sticky Footer
 		mygoui.Divider(c)
-		mygoui.Text(c, fmt.Sprintf("今日用量：%s Token · %s", usage.FormatTokens(a.usageSummary.TodayTokens), usage.FormatUSD(a.usageSummary.TodayUSD))).FontSize(12).TextColor(t.TextMuted)
-		mygoui.Spacer(c)
-		mygoui.Row(c).Gap(8).Children(func() {
+		mygoui.Row(c).Gap(8).AlignItems(mygoui.Center).Children(func() {
 			if mygoui.Button(c, a.t("sidebar.open_antigravity", "打开 Antigravity")).Clicked() {
 				a.launchAntigravity()
 			}
@@ -696,12 +811,21 @@ func (a *App) popoverView(c *mygoui.Context) {
 	})
 }
 
+func (a *App) miniTile(c *mygoui.Context, cardBg mygoui.Color, label, value string) {
+	t := c.Theme()
+	mygoui.Column(c).Padding(10, 12).Gap(4).Radius(10).Background(cardBg).Border(1, t.Border).Children(func() {
+		mygoui.Text(c, label).FontSize(11).TextColor(t.TextMuted).NoWrap()
+		mygoui.Text(c, value).FontSize(16).Bold().NoWrap()
+	})
+}
+
 func (a *App) mainView(c *mygoui.Context) {
 	t := c.Theme()
-	mygoui.Row(c).Fill().AlignItems(mygoui.Stretch).Background(t.Background).Children(func() {
+	bg := a.pageCanvasColor(t)
+	mygoui.Row(c).Fill().AlignItems(mygoui.Stretch).Background(bg).Children(func() {
 		a.sidebarView(c)
 		mygoui.Scroll(c).Grow(1).FillHeight().Children(func() {
-			mygoui.Column(c).FillWidth().Padding(24).Gap(16).Children(func() {
+			mygoui.Column(c).FillWidth().Padding(22, 24).Gap(16).Children(func() {
 				switch a.activeNav {
 				case "overview":
 					a.overviewPage(c)
@@ -724,7 +848,7 @@ func (a *App) mainView(c *mygoui.Context) {
 
 func (a *App) sidebarView(c *mygoui.Context) {
 	t := c.Theme()
-	sidebarBg := mygoui.RGB(238, 240, 244)
+	sidebarBg := mygoui.RGB(236, 238, 242)
 	if t.Dark {
 		sidebarBg = mygoui.RGB(26, 29, 36)
 	}
@@ -734,14 +858,18 @@ func (a *App) sidebarView(c *mygoui.Context) {
 		activeBg = mygoui.RGBA(59, 130, 246, 0.18)
 		activeFg = mygoui.RGB(96, 165, 250)
 	}
+	chipBg := mygoui.RGBA(15, 23, 42, 0.05)
+	if t.Dark {
+		chipBg = mygoui.RGBA(255, 255, 255, 0.07)
+	}
 
 	mygoui.Column(c).Width(204).FillHeight().Padding(16, 12).Gap(14).
 		Background(sidebarBg).BorderWidth(0, 1, 0, 0).BorderColor(t.Border).Children(func() {
-		mygoui.Row(c).Padding(4, 6).Gap(8).AlignItems(mygoui.Center).Children(func() {
+		mygoui.Row(c).Padding(4, 8).Gap(9).AlignItems(mygoui.Center).Children(func() {
 			if a.logoBmp != nil {
-				mygoui.Image(c, a.logoBmp).Size(24, 24).Fit(mygoui.Contain).Radius(5)
+				mygoui.Image(c, a.logoBmp).Size(22, 22).Fit(mygoui.Contain).Radius(5)
 			}
-			mygoui.Text(c, "GravityBox").FontSize(16).Bold()
+			mygoui.Text(c, "GravityBox").FontSize(15).Bold().NoWrap()
 		})
 
 		mygoui.Column(c).Gap(3).Grow(1).Children(func() {
@@ -762,7 +890,7 @@ func (a *App) sidebarView(c *mygoui.Context) {
 						fg = activeFg
 					}
 					mygoui.Icon(c, item.icon).FontSize(15).TextColor(fg)
-					label := mygoui.Text(c, a.t(item.key, item.fallback)).FontSize(13)
+					label := mygoui.Text(c, a.t(item.key, item.fallback)).FontSize(13).NoWrap()
 					if selected {
 						label.Bold().TextColor(activeFg)
 					} else {
@@ -779,9 +907,9 @@ func (a *App) sidebarView(c *mygoui.Context) {
 			} else if a.antigravityRunning {
 				dotColor = mygoui.RGB(217, 119, 6)
 			}
-			mygoui.Row(c).Padding(7, 10).Gap(8).Radius(8).AlignItems(mygoui.Center).Background(t.Surface).Border(1, t.Border).Children(func() {
+			mygoui.Row(c).Padding(7, 10).Gap(8).Radius(8).AlignItems(mygoui.Center).Background(chipBg).Children(func() {
 				mygoui.Box(c).Size(8, 8).Radius(4).Background(dotColor)
-				mygoui.Text(c, a.sidebarStatusText()).FontSize(12).TextColor(t.TextMuted).Grow(1)
+				mygoui.Text(c, a.sidebarStatusText()).FontSize(11).TextColor(t.TextMuted).NoWrap().Grow(1)
 			})
 			if mygoui.Button(c, a.t("sidebar.open_antigravity", "打开 Antigravity")).FillWidth().Clicked() {
 				a.launchAntigravity()
@@ -803,7 +931,7 @@ func (a *App) sidebarStatusText() string {
 	if a.asarStatus.IsPatched {
 		return "深度汉化已接管 · 运行中"
 	}
-	return "检测到 Antigravity 正在运行…"
+	return "检测到 Antigravity 运行中…"
 }
 
 func orDash(s string) string {

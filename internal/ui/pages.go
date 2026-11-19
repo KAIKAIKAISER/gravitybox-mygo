@@ -275,33 +275,35 @@ func (a *App) renderAccountCard(c *mygoui.Context, email, displayName, tier stri
 					mygoui.Badge(c, "当前账号").Background(mygoui.RGBA(37, 99, 235, 0.14)).TextColor(mygoui.RGB(37, 99, 235))
 				}
 				mygoui.Spacer(c)
-				if isActive {
-					if mygoui.Button(c, "↻").Disabled(a.acctBusy.Load()).Clicked() {
-						a.snapshotCurrentAccountAsync()
-					}
-				} else if isSaved {
-					if mygoui.PrimaryButton(c, "切换").Disabled(a.acctBusy.Load()).Clicked() {
-						a.switchAccountAsync(email)
-					}
+			if isActive {
+				if a.svgIconButton(c, svgRefresh, "重新保存当前账号快照", a.acctBusy.Load()).Clicked() {
+					a.snapshotCurrentAccountAsync()
 				}
-				if isSaved {
-					if mygoui.Button(c, "重命名").Clicked() {
-						a.renameTargetEmail = email
-						a.renameInput = displayName
-						a.showRenameModal = true
-					}
-					if mygoui.Button(c, "删除").Clicked() {
-						a.deleteTargetEmail = email
-						a.showDeleteModal = true
-					}
+			} else if isSaved {
+				if mygoui.PrimaryButton(c, "切换").Disabled(a.acctBusy.Load()).Clicked() {
+					a.switchAccountAsync(email)
 				}
-				toggleIcon := "▴"
-				if collapsed {
-					toggleIcon = "▾"
+			}
+			if isSaved {
+				if mygoui.Button(c, "重命名").Clicked() {
+					a.renameTargetEmail = email
+					a.renameInput = displayName
+					a.showRenameModal = true
 				}
-				if mygoui.Button(c, toggleIcon).Clicked() {
-					a.collapsedAccounts[email] = !collapsed
+				if mygoui.Button(c, "删除").Clicked() {
+					a.deleteTargetEmail = email
+					a.showDeleteModal = true
 				}
+			}
+			toggleIcon := svgChevronUp
+			toggleLabel := "收起配额"
+			if collapsed {
+				toggleIcon = svgChevronDown
+				toggleLabel = "展开配额"
+			}
+			if a.svgIconButton(c, toggleIcon, toggleLabel, false).Clicked() {
+				a.collapsedAccounts[email] = !collapsed
+			}
 			})
 			if displayName != email || isActive {
 				mygoui.Row(c).Gap(8).AlignItems(mygoui.Center).Children(func() {
@@ -464,16 +466,14 @@ func (a *App) usagePage(c *mygoui.Context) {
 				iconKey = "openai"
 			}
 			mygoui.Row(c.Key("umrow-"+m.Model)).Gap(10).AlignItems(mygoui.Center).Padding(6, 0).Children(func() {
-				if bmp := a.modelBmps[iconKey]; bmp != nil {
-					mygoui.Image(c, bmp).Size(24, 24).Fit(mygoui.Contain).Radius(6)
-				}
+				a.modelIconBadge(c, iconKey)
 				mygoui.Column(c).Grow(1).Gap(2).Children(func() {
-					mygoui.Text(c, m.Model).FontSize(13).Bold()
-					mygoui.Text(c, fmt.Sprintf("%s Token · %d req", usage.FormatTokens(m.TotalTokens), m.RequestCount)).FontSize(11).TextColor(t.TextMuted)
+					mygoui.Text(c, m.Model).FontSize(13).Bold().NoWrap()
+					mygoui.Text(c, fmt.Sprintf("%s Token · %d req", usage.FormatTokens(m.TotalTokens), m.RequestCount)).FontSize(11).TextColor(t.TextMuted).NoWrap()
 				})
 				mygoui.Column(c).AlignItems(mygoui.End).Gap(2).Children(func() {
-					mygoui.Text(c, usage.FormatUSD(m.EstimatedUSD)).FontSize(13).Bold()
-					mygoui.Text(c, fmt.Sprintf("占比 %.0f%%", share)).FontSize(11).TextColor(t.TextMuted)
+					mygoui.Text(c, usage.FormatUSD(m.EstimatedUSD)).FontSize(13).Bold().NoWrap()
+					mygoui.Text(c, fmt.Sprintf("占比 %.0f%%", share)).FontSize(11).TextColor(t.TextMuted).NoWrap()
 				})
 			})
 		}
@@ -845,15 +845,13 @@ func (a *App) quotaBarRow(c *mygoui.Context, w quota.QuotaWindow) {
 	t := c.Theme()
 	mygoui.Column(c.Key("qw-"+w.Label)).Gap(5).Children(func() {
 		mygoui.Row(c).Gap(6).AlignItems(mygoui.Center).Children(func() {
-			if bmp := a.modelBmps[w.IconKey]; bmp != nil {
-				mygoui.Image(c, bmp).Size(15, 15).Fit(mygoui.Contain).Radius(3)
-			}
-			mygoui.Text(c, w.Label).FontSize(13).Bold().Grow(1)
+			a.modelVectorIcon(c, w.IconKey, 14)
+			mygoui.Text(c, w.Label).FontSize(12).Bold().NoWrap().Grow(1)
 			if w.ResetCountdown != "" {
-				mygoui.Text(c, w.ResetCountdown).FontSize(12).TextColor(t.TextMuted)
+				mygoui.Text(c, w.ResetCountdown).FontSize(11).TextColor(t.TextMuted).NoWrap()
 			}
 			pctText := fmt.Sprintf("%.0f%%", w.RemainingPct)
-			txt := mygoui.Text(c, pctText).FontSize(13).Bold()
+			txt := mygoui.Text(c, pctText).FontSize(12).Bold().NoWrap()
 			if w.RemainingPct <= 10 {
 				txt.TextColor(mygoui.RGB(220, 38, 38))
 			} else if w.RemainingPct <= 25 {
@@ -870,12 +868,57 @@ func (a *App) quotaBarRow(c *mygoui.Context, w quota.QuotaWindow) {
 	})
 }
 
+func (a *App) modelVectorIcon(c *mygoui.Context, iconKey string, sz float32) {
+	switch iconKey {
+	case "claude":
+		mygoui.Icon(c, svgClaude).FontSize(sz).TextColor(mygoui.RGB(217, 119, 6))
+	case "openai":
+		mygoui.Icon(c, svgOpenAI).FontSize(sz).TextColor(mygoui.RGB(16, 163, 127))
+	default:
+		mygoui.Icon(c, svgGemini).FontSize(sz).TextColor(mygoui.RGB(59, 130, 246))
+	}
+}
+
+func (a *App) modelIconBadge(c *mygoui.Context, iconKey string) {
+	bg := mygoui.RGBA(59, 130, 246, 0.12)
+	fg := mygoui.RGB(37, 99, 235)
+	svg := svgGemini
+	switch iconKey {
+	case "claude":
+		bg = mygoui.RGBA(217, 119, 6, 0.12)
+		fg = mygoui.RGB(217, 119, 6)
+		svg = svgClaude
+	case "openai":
+		bg = mygoui.RGBA(16, 163, 127, 0.12)
+		fg = mygoui.RGB(16, 163, 127)
+		svg = svgOpenAI
+	}
+	a.iconBadge(c, svg, bg, fg)
+}
+
+func (a *App) svgIconButton(c *mygoui.Context, svg *mygoui.SVG, label string, disabled bool) mygoui.Element {
+	t := c.Theme()
+	btn := mygoui.ButtonBase(c).Padding(6, 8).Radius(8).
+		Background(t.Surface).Border(1, t.Border).
+		Disabled(disabled).Label(label).Tooltip(label)
+	btn.Children(func() {
+		mygoui.Icon(c, svg).FontSize(13).TextColor(t.Text)
+	})
+	return btn
+}
+
+func (a *App) pillBadge(c *mygoui.Context, text string, bg, fg mygoui.Color) {
+	mygoui.Row(c).Padding(2, 8).Radius(999).Background(bg).AlignItems(mygoui.Center).Children(func() {
+		mygoui.Text(c, text).FontSize(11).Bold().TextColor(fg).NoWrap()
+	})
+}
+
 func (a *App) metricCard(c *mygoui.Context, title, value, sub string) {
 	t := c.Theme()
 	a.card(c, "", func() {
-		mygoui.Text(c, title).FontSize(12).TextColor(t.TextMuted)
-		mygoui.Text(c, value).FontSize(26).Bold()
-		mygoui.Text(c, sub).FontSize(12).TextColor(t.TextMuted)
+		mygoui.Text(c, title).FontSize(12).TextColor(t.TextMuted).NoWrap()
+		mygoui.Text(c, value).FontSize(26).Bold().NoWrap()
+		mygoui.Text(c, sub).FontSize(12).TextColor(t.TextMuted).NoWrap()
 	})
 }
 
@@ -887,7 +930,16 @@ func (a *App) iconBadge(c *mygoui.Context, svg *mygoui.SVG, bg, fg mygoui.Color)
 
 func (a *App) card(c *mygoui.Context, title string, body func()) {
 	t := c.Theme()
-	mygoui.Column(c).Padding(16).Gap(12).Radius(12).Background(t.Surface).Border(1, t.Border).Children(func() {
+	cardBg := mygoui.RGB(255, 255, 255)
+	borderCol := mygoui.RGBA(15, 23, 42, 0.08)
+	shadowCol := mygoui.RGBA(15, 23, 42, 0.05)
+	if t.Dark {
+		cardBg = mygoui.RGB(30, 34, 43)
+		borderCol = mygoui.RGBA(255, 255, 255, 0.08)
+		shadowCol = mygoui.RGBA(0, 0, 0, 0.25)
+	}
+	mygoui.Column(c).Padding(16).Gap(12).Radius(12).
+		Background(cardBg).Border(1, borderCol).Shadow(0, 1, 3, 0, shadowCol).Children(func() {
 		if title != "" {
 			mygoui.Text(c, title).FontSize(14).Bold()
 		}

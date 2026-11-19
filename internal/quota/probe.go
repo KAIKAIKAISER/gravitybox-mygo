@@ -135,11 +135,29 @@ func probePort(ctx context.Context, port int, csrf string) (LiveStatus, bool) {
 	return LiveStatus{}, false
 }
 
+// NormalizeFamilyName maps raw provider group labels into compact UI labels.
+func NormalizeFamilyName(raw string) string {
+	low := strings.ToLower(strings.TrimSpace(raw))
+	switch {
+	case strings.Contains(low, "argon"):
+		return "Gemini 4 Argon"
+	case strings.Contains(low, "carbon"):
+		return "Gemini 4 Carbon"
+	case strings.Contains(low, "claude") || strings.Contains(low, "gpt") || strings.Contains(low, "anthropic") || strings.Contains(low, "openai"):
+		return "Claude/GPT"
+	case strings.Contains(low, "gemini"):
+		return "Gemini"
+	default:
+		return strings.TrimSpace(raw)
+	}
+}
+
 func buildQuotaWindows(families []FamilyQuota) []QuotaWindow {
 	var out []QuotaWindow
 	for _, f := range families {
+		name := NormalizeFamilyName(f.Family)
 		icon := "gemini"
-		low := strings.ToLower(f.Family)
+		low := strings.ToLower(name)
 		if strings.Contains(low, "claude") || strings.Contains(low, "gpt") {
 			icon = "claude"
 		} else if strings.Contains(low, "openai") {
@@ -147,7 +165,7 @@ func buildQuotaWindows(families []FamilyQuota) []QuotaWindow {
 		}
 		if f.HasFiveHour {
 			out = append(out, QuotaWindow{
-				Label:          f.Family + " · 5 小时",
+				Label:          name + " · 5 小时",
 				IconKey:        icon,
 				RemainingPct:   f.FiveHourPct,
 				ResetCountdown: FormatCountdown(f.FiveHourReset),
@@ -155,7 +173,7 @@ func buildQuotaWindows(families []FamilyQuota) []QuotaWindow {
 		}
 		if f.HasWeekly {
 			out = append(out, QuotaWindow{
-				Label:          f.Family + " · 每周",
+				Label:          name + " · 每周",
 				IconKey:        icon,
 				RemainingPct:   f.WeeklyPct,
 				ResetCountdown: FormatCountdown(f.WeeklyReset),
@@ -163,7 +181,7 @@ func buildQuotaWindows(families []FamilyQuota) []QuotaWindow {
 		}
 		if !f.HasFiveHour && !f.HasWeekly {
 			out = append(out, QuotaWindow{
-				Label:        f.Family,
+				Label:        name,
 				IconKey:      icon,
 				RemainingPct: f.RemainingPct,
 			})
