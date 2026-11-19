@@ -24,6 +24,7 @@ import (
 	"gravitybox-mygo/internal/asar"
 	"gravitybox-mygo/internal/cdp"
 	"gravitybox-mygo/internal/config"
+	"gravitybox-mygo/internal/hud"
 	"gravitybox-mygo/internal/i18n"
 	"gravitybox-mygo/internal/maintenance"
 	"gravitybox-mygo/internal/quota"
@@ -32,7 +33,7 @@ import (
 	"gravitybox-mygo/resources"
 )
 
-const appVersion = "1.2.4"
+const appVersion = "1.2.5"
 
 var (
 	svgOverview    = mygoui.MustParseSVG([]byte(`<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg>`))
@@ -145,13 +146,16 @@ type App struct {
 	scanResult           asar.ScanResult
 }
 
-// Run initializes and runs the GravityBox application.
+	// Run initializes and runs the GravityBox application.
 func Run() error {
 	cfg := config.Load()
 	ctrl, err := cdp.NewController(cfg.DebugPort, i18n.ResolveLocale(cfg.AppLanguage), cfg.TranslationEnabled, cfg.HudEnabled)
 	if err != nil {
 		return err
 	}
+	hudEngine := hud.NewMetricsEngine(config.StateDir())
+	hudBridge := hud.NewBridge(hudEngine)
+	ctrl.SetHudHandler(hudBridge)
 	asCfg := accounts.LoadAutoSwitch()
 	app := &App{
 		cfg:                  cfg,
@@ -172,6 +176,7 @@ func Run() error {
 	mygo.App.SetName("GravityBox")
 	mygo.App.OnBeforeQuit(func(*mygo.QuitEvent) {
 		app.quitting = true
+		hudBridge.Stop()
 		if app.controller != nil {
 			app.controller.Stop()
 		}

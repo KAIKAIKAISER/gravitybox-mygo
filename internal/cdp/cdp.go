@@ -75,7 +75,7 @@ type Client struct {
 	seq     atomic.Int64
 	mu      sync.Mutex
 	pending map[int64]chan rpcResponse
-	events  chan rpcEvent
+	events  chan RPCEvent
 	closed  chan struct{}
 	once    sync.Once
 }
@@ -85,7 +85,8 @@ type rpcResponse struct {
 	Err    error
 }
 
-type rpcEvent struct {
+// RPCEvent represents an asynchronous CDP notification event from Chromium.
+type RPCEvent struct {
 	Method string
 	Params json.RawMessage
 }
@@ -123,7 +124,7 @@ func Dial(ctx context.Context, wsURL string) (*Client, error) {
 	c := &Client{
 		ws:      ws,
 		pending: make(map[int64]chan rpcResponse),
-		events:  make(chan rpcEvent, 64),
+		events:  make(chan RPCEvent, 256),
 		closed:  make(chan struct{}),
 	}
 	go c.readLoop()
@@ -161,7 +162,7 @@ func (c *Client) readLoop() {
 		}
 		if msg.Method != "" {
 			select {
-			case c.events <- rpcEvent{Method: msg.Method, Params: msg.Params}:
+			case c.events <- RPCEvent{Method: msg.Method, Params: msg.Params}:
 			default:
 			}
 		}
@@ -219,7 +220,17 @@ func (c *Client) removePending(id int64) {
 	c.mu.Unlock()
 }
 
-// Evaluate runs JavaScript in the optional isolated execution context.
+// Events returns the asynchronous CDP event stream.
+func (c *Client) Events() <-chan RPCEvent {
+	return c.events
+}
+
+// Closed returns a channel that closes when the WebSocket session closes.
+func (c *Client) Closed() <-chan struct{} {
+	return c.closed
+}
+
+// Evaluate runs JavaScript in the optional isolated execution context and checks JS exceptions.
 func (c *Client) Evaluate(ctx context.Context, expression string, contextID *int64) (json.RawMessage, error) {
 	params := map[string]any{
 		"expression":    expression,
@@ -229,7 +240,26 @@ func (c *Client) Evaluate(ctx context.Context, expression string, contextID *int
 	if contextID != nil {
 		params["contextId"] = *contextID
 	}
-	return c.Call(ctx, "Runtime.evaluate", params)
+	raw, err := c.Call(ctx, "Runtime.evaluate", params)
+	if err != nil {
+		return nil, err
+	}
+	var chk struct {
+		ExceptionDetails *struct {
+			Text      string `json:"text"`
+			Exception *struct {
+				Description string `json:"description"`
+			} `json:"exception"`
+		} `json:"exceptionDetails"`
+	}
+	if json.Unmarshal(raw, &chk) == nil && chk.ExceptionDetails != nil {
+		msg := chk.ExceptionDetails.Text
+		if chk.ExceptionDetails.Exception != nil && chk.ExceptionDetails.Exception.Description != "" {
+			msg = chk.ExceptionDetails.Exception.Description
+		}
+		return raw, fmt.Errorf("CDP JS exception: %s", msg)
+	}
+	return raw, nil
 }
 
 // Close shuts down the WebSocket connection and rejects pending calls.

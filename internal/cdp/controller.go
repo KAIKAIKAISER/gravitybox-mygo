@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"gravitybox-mygo/internal/config"
 	"gravitybox-mygo/resources"
@@ -36,21 +37,36 @@ type ControllerStatus struct {
 	ConnectedTargetIDs []string
 }
 
+// HudHandler coordinates bi-directional runtime HUD metrics over CDP isolated world bindings.
+type HudHandler interface {
+	AttachTarget(targetID string, push func(ctx context.Context, expr string) (bool, error))
+	DetachTarget(targetID string)
+	HandleBindingPayload(targetID, rawPayload string)
+	RefreshAll()
+}
+
 type attachedSession struct {
-	targetID  string
+	targetID    string
+	client      *Client
+	docScriptID string
+
+	mu        sync.Mutex
 	url       string
-	client    *Client
 	contextID *int64
 }
 
 // Controller manages CDP connections and injects runtime localization + HUD scripts into Antigravity windows.
 type Controller struct {
+	ctrlCtx    context.Context
+	ctrlCancel context.CancelFunc
+
 	mu                 sync.Mutex
 	debugPort          int
 	locale             string
 	translationEnabled bool
 	hudEnabled         bool
 	deepAsarActive     bool
+	hudHandler         HudHandler
 
 	bundleJS   string
 	runtimeID  string
@@ -85,7 +101,10 @@ func NewController(debugPort int, locale string, translationEnabled, hudEnabled 
 	}
 
 	sum := sha256.Sum256([]byte(bundle))
+	ctrlCtx, ctrlCancel := context.WithCancel(context.Background())
 	return &Controller{
+		ctrlCtx:            ctrlCtx,
+		ctrlCancel:         ctrlCancel,
 		debugPort:          debugPort,
 		locale:             locale,
 		translationEnabled: translationEnabled,
@@ -104,10 +123,17 @@ func NewController(debugPort int, locale string, translationEnabled, hudEnabled 
 	}, nil
 }
 
+// SetHudHandler registers the live HUD metrics bridge with the CDP controller.
+func (c *Controller) SetHudHandler(h HudHandler) {
+	c.mu.Lock()
+	c.hudHandler = h
+	c.mu.Unlock()
+}
+
 // UpdateConfig updates runtime preferences and propagates them on the next sync.
 func (c *Controller) UpdateConfig(debugPort int, locale string, translationEnabled, hudEnabled, deepAsarActive bool) {
 	c.mu.Lock()
-	defer c.mu.Unlock()
+	localeChanged := c.locale != locale
 	if debugPort > 0 {
 		c.debugPort = debugPort
 	}
@@ -115,6 +141,12 @@ func (c *Controller) UpdateConfig(debugPort int, locale string, translationEnabl
 	c.translationEnabled = translationEnabled
 	c.hudEnabled = hudEnabled
 	c.deepAsarActive = deepAsarActive
+	h := c.hudHandler
+	c.mu.Unlock()
+
+	if localeChanged && h != nil && hudEnabled {
+		go h.RefreshAll()
+	}
 }
 
 // Status returns a snapshot of the current CDP injection state.
@@ -140,38 +172,34 @@ func (c *Controller) SyncOnce(ctx context.Context, appRunning bool) ControllerSt
 		return c.setStatus(mode, "", 0, nil)
 	}
 
-	targets, err := ListTargets(ctx, port)
-	if err != nil {
-		if activePort := readDevToolsActivePort(); activePort > 0 && activePort != port {
-			if t2, err2 := ListTargets(ctx, activePort); err2 == nil {
-				targets = t2
-				err = nil
-			}
-		}
-	}
-	if err != nil {
+	permitted, ok := c.discoverPermittedTargets(ctx, port)
+	if !ok {
 		c.closeAllSessions()
 		return c.setStatus("debug-port-missing", "", 0, nil)
 	}
 
-	permitted := make([]Target, 0, len(targets))
-	permittedMap := make(map[string]Target)
-	for _, t := range targets {
-		if isAllowedTarget(t) {
-			permitted = append(permitted, t)
-			permittedMap[t.ID] = t
-		}
+	permittedMap := make(map[string]Target, len(permitted))
+	for _, t := range permitted {
+		permittedMap[t.ID] = t
 	}
 
 	// Prune closed or disallowed sessions.
+	var stale []*attachedSession
 	c.mu.Lock()
 	for id, sess := range c.sessions {
-		if _, ok := permittedMap[id]; !ok {
-			_ = sess.client.Close()
+		if _, exists := permittedMap[id]; !exists {
+			stale = append(stale, sess)
 			delete(c.sessions, id)
 		}
 	}
+	h := c.hudHandler
 	c.mu.Unlock()
+	for _, s := range stale {
+		_ = s.client.Close()
+		if h != nil {
+			h.DetachTarget(s.targetID)
+		}
+	}
 
 	var lastErr string
 	for _, tgt := range permitted {
@@ -194,13 +222,39 @@ func (c *Controller) SyncOnce(ctx context.Context, appRunning bool) ControllerSt
 	return c.setStatus(mode, lastErr, len(ids), ids)
 }
 
+func (c *Controller) discoverPermittedTargets(ctx context.Context, port int) ([]Target, bool) {
+	ports := []int{port}
+	if activePort := readDevToolsActivePort(); activePort > 0 && activePort != port {
+		ports = append(ports, activePort)
+	}
+	anyReachable := false
+	for _, p := range ports {
+		targets, err := ListTargets(ctx, p)
+		if err != nil {
+			continue
+		}
+		anyReachable = true
+		permitted := make([]Target, 0, len(targets))
+		for _, t := range targets {
+			if isAllowedTarget(t) {
+				permitted = append(permitted, t)
+			}
+		}
+		if len(permitted) > 0 {
+			return permitted, true
+		}
+	}
+	return nil, anyReachable
+}
+
 func (c *Controller) ensureInjected(ctx context.Context, tgt Target) error {
 	c.mu.Lock()
 	sess := c.sessions[tgt.ID]
+	hudHandler := c.hudHandler
 	c.mu.Unlock()
 
 	if sess == nil {
-		cli, err := Dial(ctx, tgt.WebSocketDebuggerURL)
+		cli, err := Dial(c.ctrlCtx, tgt.WebSocketDebuggerURL)
 		if err != nil {
 			return err
 		}
@@ -212,6 +266,10 @@ func (c *Controller) ensureInjected(ctx context.Context, tgt Target) error {
 			_ = cli.Close()
 			return err
 		}
+		_, _ = cli.Call(ctx, "Runtime.addBinding", map[string]any{
+			"name":                 "__gravityboxHudBridge",
+			"executionContextName": isolatedWorldName,
+		})
 		sess = &attachedSession{
 			targetID: tgt.ID,
 			url:      tgt.URL,
@@ -220,10 +278,16 @@ func (c *Controller) ensureInjected(ctx context.Context, tgt Target) error {
 		c.mu.Lock()
 		c.sessions[tgt.ID] = sess
 		c.mu.Unlock()
+		go c.runSessionEvents(sess)
 	}
 
 	// Ensure isolated world exists and state matches current runtimeId.
-	if sess.contextID == nil {
+	sess.mu.Lock()
+	ctxID := sess.contextID
+	sessURL := sess.url
+	sess.mu.Unlock()
+
+	if ctxID == nil {
 		rawTree, err := sess.client.Call(ctx, "Page.getFrameTree", map[string]any{})
 		if err != nil {
 			c.dropSession(tgt.ID)
@@ -254,16 +318,27 @@ func (c *Controller) ensureInjected(ctx context.Context, tgt Target) error {
 		if err := json.Unmarshal(rawWorld, &world); err != nil || world.ExecutionContextID == 0 {
 			return err
 		}
-		sess.contextID = &world.ExecutionContextID
+		idCopy := world.ExecutionContextID
+		sess.mu.Lock()
+		sess.contextID = &idCopy
 		if tree.FrameTree.Frame.URL != "" {
 			sess.url = tree.FrameTree.Frame.URL
 		}
+		ctxID = sess.contextID
+		sessURL = sess.url
+		sess.mu.Unlock()
+	}
+
+	if hudHandler != nil {
+		hudHandler.AttachTarget(tgt.ID, c.makePushFunc(sess))
 	}
 
 	// Check if runtime is already active in this context.
-	rawState, err := sess.client.Evaluate(ctx, `globalThis.__GRAVITYBOX_ENGINE_V1__?.state?.()`, sess.contextID)
+	rawState, err := sess.client.Evaluate(ctx, `globalThis.__GRAVITYBOX_ENGINE_V1__?.state?.()`, ctxID)
 	if err != nil {
+		sess.mu.Lock()
 		sess.contextID = nil
+		sess.mu.Unlock()
 		return err
 	}
 	var stateVal struct {
@@ -285,13 +360,19 @@ func (c *Controller) ensureInjected(ctx context.Context, tgt Target) error {
 	c.mu.Unlock()
 
 	if !stateVal.Result.Value.Active || stateVal.Result.Value.RuntimeID != runtimeID {
-		bootExpr, err := c.buildBootExpression(sess.url, locale, transEnabled, hudEnabled)
+		bootExpr, err := c.buildBootExpression(sessURL, locale, transEnabled, hudEnabled)
 		if err != nil {
 			return err
 		}
-		if _, err := sess.client.Evaluate(ctx, bootExpr, sess.contextID); err != nil {
+		// Re-ensure binding is registered before evaluating HUD bundle.
+		_, _ = sess.client.Call(ctx, "Runtime.addBinding", map[string]any{
+			"name":                 "__gravityboxHudBridge",
+			"executionContextName": isolatedWorldName,
+		})
+		if _, err := sess.client.Evaluate(ctx, bootExpr, ctxID); err != nil {
 			return err
 		}
+		c.registerOnNewDocument(ctx, sess, bootExpr)
 	}
 
 	// Sync HUD & language state.
@@ -302,11 +383,137 @@ func (c *Controller) ensureInjected(ctx context.Context, tgt Target) error {
 	if hudEnabled {
 		expr := `(globalThis.__GRAVITYBOX_ATTACH_HUD__?.(), globalThis.__GRAVITYBOX_HUD_V1__?.setLanguage?.(` +
 			strconvQuote(hudLocale) + `), globalThis.__GRAVITYBOX_HUD_V1__?.setEnabled?.(true), globalThis.__GRAVITYBOX_HUD_V1__?.syncAllSessions?.())`
-		_, _ = sess.client.Evaluate(ctx, expr, sess.contextID)
+		_, _ = sess.client.Evaluate(ctx, expr, ctxID)
 	} else {
-		_, _ = sess.client.Evaluate(ctx, `globalThis.__GRAVITYBOX_HUD_V1__?.setEnabled?.(false)`, sess.contextID)
+		_, _ = sess.client.Evaluate(ctx, `globalThis.__GRAVITYBOX_HUD_V1__?.setEnabled?.(false)`, ctxID)
 	}
 	return nil
+}
+
+func (c *Controller) makePushFunc(sess *attachedSession) func(context.Context, string) (bool, error) {
+	return func(pctx context.Context, expr string) (bool, error) {
+		sess.mu.Lock()
+		ctxID := sess.contextID
+		sess.mu.Unlock()
+		if ctxID == nil {
+			return false, nil
+		}
+		callCtx, cancel := context.WithTimeout(pctx, 3*time.Second)
+		defer cancel()
+		raw, err := sess.client.Evaluate(callCtx, expr, ctxID)
+		if err != nil {
+			return false, err
+		}
+		var res struct {
+			Result struct {
+				Value bool `json:"value"`
+			} `json:"result"`
+		}
+		if json.Unmarshal(raw, &res) == nil {
+			return res.Result.Value, nil
+		}
+		return true, nil
+	}
+}
+
+func (c *Controller) registerOnNewDocument(ctx context.Context, sess *attachedSession, source string) {
+	sess.mu.Lock()
+	oldID := sess.docScriptID
+	sess.mu.Unlock()
+	if oldID != "" {
+		_, _ = sess.client.Call(ctx, "Page.removeScriptToEvaluateOnNewDocument", map[string]any{
+			"identifier": oldID,
+		})
+	}
+	raw, err := sess.client.Call(ctx, "Page.addScriptToEvaluateOnNewDocument", map[string]any{
+		"source":    source,
+		"worldName": isolatedWorldName,
+	})
+	if err != nil {
+		return
+	}
+	var reg struct {
+		Identifier string `json:"identifier"`
+	}
+	if json.Unmarshal(raw, &reg) == nil && reg.Identifier != "" {
+		sess.mu.Lock()
+		sess.docScriptID = reg.Identifier
+		sess.mu.Unlock()
+	}
+}
+
+func (c *Controller) runSessionEvents(sess *attachedSession) {
+	events := sess.client.Events()
+	closed := sess.client.Closed()
+	for {
+		select {
+		case <-c.ctrlCtx.Done():
+			return
+		case <-closed:
+			c.mu.Lock()
+			if cur, ok := c.sessions[sess.targetID]; ok && cur == sess {
+				delete(c.sessions, sess.targetID)
+			}
+			h := c.hudHandler
+			c.mu.Unlock()
+			if h != nil {
+				h.DetachTarget(sess.targetID)
+			}
+			return
+		case ev := <-events:
+			switch ev.Method {
+			case "Runtime.bindingCalled":
+				var p struct {
+					Name               string `json:"name"`
+					Payload            string `json:"payload"`
+					ExecutionContextID int64  `json:"executionContextId"`
+				}
+				if json.Unmarshal(ev.Params, &p) == nil && p.Name == "__gravityboxHudBridge" {
+					c.mu.Lock()
+					h := c.hudHandler
+					c.mu.Unlock()
+					if h != nil {
+						h.HandleBindingPayload(sess.targetID, p.Payload)
+					}
+				}
+			case "Runtime.executionContextDestroyed":
+				var p struct {
+					ExecutionContextID int64 `json:"executionContextId"`
+				}
+				if json.Unmarshal(ev.Params, &p) == nil && p.ExecutionContextID != 0 {
+					sess.mu.Lock()
+					matched := sess.contextID != nil && *sess.contextID == p.ExecutionContextID
+					if matched {
+						sess.contextID = nil
+					}
+					sess.mu.Unlock()
+					if matched {
+						c.mu.Lock()
+						h := c.hudHandler
+						c.mu.Unlock()
+						if h != nil {
+							h.DetachTarget(sess.targetID)
+						}
+					}
+				}
+			case "Page.frameNavigated":
+				var p struct {
+					Frame struct {
+						ParentID string `json:"parentId"`
+						URL      string `json:"url"`
+					} `json:"frame"`
+				}
+				if json.Unmarshal(ev.Params, &p) == nil && p.Frame.ParentID == "" {
+					sess.mu.Lock()
+					if p.Frame.URL != "" {
+						sess.url = p.Frame.URL
+					}
+					sess.contextID = nil
+					sess.mu.Unlock()
+				}
+			}
+		}
+	}
 }
 
 func (c *Controller) buildBootExpression(pageURL, locale string, transEnabled, hudEnabled bool) (string, error) {
@@ -345,20 +552,35 @@ func (c *Controller) buildBootExpression(pageURL, locale string, transEnabled, h
 
 func (c *Controller) dropSession(id string) {
 	c.mu.Lock()
-	if sess, ok := c.sessions[id]; ok {
-		_ = sess.client.Close()
+	sess, ok := c.sessions[id]
+	if ok {
 		delete(c.sessions, id)
 	}
+	h := c.hudHandler
 	c.mu.Unlock()
+	if ok {
+		_ = sess.client.Close()
+		if h != nil {
+			h.DetachTarget(id)
+		}
+	}
 }
 
 func (c *Controller) closeAllSessions() {
 	c.mu.Lock()
+	all := make([]*attachedSession, 0, len(c.sessions))
 	for id, sess := range c.sessions {
-		_ = sess.client.Close()
+		all = append(all, sess)
 		delete(c.sessions, id)
 	}
+	h := c.hudHandler
 	c.mu.Unlock()
+	for _, s := range all {
+		_ = s.client.Close()
+		if h != nil {
+			h.DetachTarget(s.targetID)
+		}
+	}
 }
 
 func (c *Controller) setStatus(mode, lastErr string, windows int, ids []string) ControllerStatus {
@@ -375,8 +597,9 @@ func (c *Controller) setStatus(mode, lastErr string, windows int, ids []string) 
 	return c.lastStatus
 }
 
-// Stop closes all CDP WebSocket sessions.
+// Stop closes all CDP WebSocket sessions and stops background event listeners.
 func (c *Controller) Stop() {
+	c.ctrlCancel()
 	c.closeAllSessions()
 }
 
