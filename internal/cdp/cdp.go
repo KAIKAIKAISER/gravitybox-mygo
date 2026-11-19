@@ -11,8 +11,6 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
-
-	"golang.org/x/net/websocket"
 )
 
 // Target describes a single CDP debuggable page or worker target from /json/list.
@@ -71,7 +69,7 @@ func ListTargets(ctx context.Context, port int) ([]Target, error) {
 
 // Client is a lightweight pure-Go CDP WebSocket client.
 type Client struct {
-	ws      *websocket.Conn
+	ws      *wsConn
 	seq     atomic.Int64
 	mu      sync.Mutex
 	pending map[int64]chan rpcResponse
@@ -111,12 +109,7 @@ func Dial(ctx context.Context, wsURL string) (*Client, error) {
 	if u.Scheme != "ws" {
 		return nil, fmt.Errorf("unsupported CDP scheme: %s", u.Scheme)
 	}
-	cfg, err := websocket.NewConfig(wsURL, "http://127.0.0.1")
-	if err != nil {
-		return nil, err
-	}
-	cfg.Dialer = &net.Dialer{Timeout: 3 * time.Second}
-	ws, err := websocket.DialConfig(cfg)
+	ws, err := dialWS(ctx, wsURL)
 	if err != nil {
 		return nil, err
 	}
@@ -138,8 +131,8 @@ func Dial(ctx context.Context, wsURL string) (*Client, error) {
 func (c *Client) readLoop() {
 	defer c.Close()
 	for {
-		var raw string
-		if err := websocket.Message.Receive(c.ws, &raw); err != nil {
+		raw, err := c.ws.ReadText()
+		if err != nil {
 			return
 		}
 		var msg wireMsg
@@ -193,7 +186,7 @@ func (c *Client) Call(ctx context.Context, method string, params any) (json.RawM
 		c.removePending(id)
 		return nil, err
 	}
-	if err := websocket.Message.Send(c.ws, string(payload)); err != nil {
+	if err := c.ws.WriteText(string(payload)); err != nil {
 		c.removePending(id)
 		return nil, err
 	}

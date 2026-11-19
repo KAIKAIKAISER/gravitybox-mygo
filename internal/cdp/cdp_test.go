@@ -1,8 +1,15 @@
 package cdp
 
 import (
+	"bufio"
+	"context"
+	"crypto/sha1"
+	"encoding/base64"
+	"net"
+	"net/http"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestAssertLoopback(t *testing.T) {
@@ -55,5 +62,46 @@ func TestNewControllerLoadsDictionary(t *testing.T) {
 	st := ctrl.Status()
 	if st.DictionaryEntries < 1000 {
 		t.Fatalf("expected >1000 dictionary entries, got %d", st.DictionaryEntries)
+	}
+	ctrl.Stop()
+}
+
+func TestDialWSOmitsOriginHeader(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	defer ln.Close()
+
+	originSeen := make(chan string, 1)
+	go func() {
+		conn, err := ln.Accept()
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+		br := bufio.NewReader(conn)
+		req, err := http.ReadRequest(br)
+		if err != nil {
+			return
+		}
+		originSeen <- req.Header.Get("Origin")
+		key := req.Header.Get("Sec-WebSocket-Key")
+		sum := sha1.Sum([]byte(key + wsGUID))
+		accept := base64.StdEncoding.EncodeToString(sum[:])
+		_, _ = conn.Write([]byte("HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: " + accept + "\r\n\r\n"))
+		time.Sleep(100 * time.Millisecond)
+	}()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	ws, err := dialWS(ctx, "ws://"+ln.Addr().String()+"/devtools/page/test")
+	if err != nil {
+		t.Fatalf("dialWS failed: %v", err)
+	}
+	defer ws.Close()
+
+	if got := <-originSeen; got != "" {
+		t.Fatalf("expected empty Origin header to satisfy Chromium DevTools check, got %q", got)
 	}
 }

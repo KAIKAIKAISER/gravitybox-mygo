@@ -255,7 +255,7 @@ func LaunchAntigravity(exePath string, debugPort int) error {
 	if debugPort <= 0 {
 		debugPort = 9222
 	}
-	cmd := exec.Command(exePath, fmt.Sprintf("--remote-debugging-port=%d", debugPort))
+	cmd := exec.Command(exePath, fmt.Sprintf("--remote-debugging-port=%d", debugPort), "--remote-allow-origins=*")
 	cmd.Dir = filepath.Dir(exePath)
 	return cmd.Start()
 }
