@@ -33,7 +33,7 @@ import (
 	"gravitybox-mygo/resources"
 )
 
-const appVersion = "1.2.6"
+const appVersion = "1.2.7"
 
 var (
 	svgOverview    = mygoui.MustParseSVG([]byte(`<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg>`))
@@ -346,13 +346,16 @@ func (a *App) refreshAsync() {
 			qCtx, qCancel := context.WithTimeout(context.Background(), 4*time.Second)
 			liveQ = quota.ProbeLive(qCtx)
 			qCancel()
+			if liveQ.Connected && liveQ.Email != "" {
+				usage.SetActiveAccountEmail(liveQ.Email)
+			}
 		}
 
 		acctFilter := a.usageAcctFilter
 		if acctFilter == "全部账号" || acctFilter == "" {
 			acctFilter = "all"
 		}
-		uCtx, uCancel := context.WithTimeout(context.Background(), 3*time.Second)
+		uCtx, uCancel := context.WithTimeout(context.Background(), 8*time.Second)
 		uSum := usage.LoadSummary(uCtx, a.usagePeriod, acctFilter)
 		popSum := uSum
 		if a.popoverPeriod != a.usagePeriod || acctFilter != "all" {
@@ -577,12 +580,13 @@ func (a *App) snapshotCurrentAccountAsync() {
 	email := a.liveQuota.Email
 	name := a.liveQuota.Name
 	tier := a.liveQuota.Tier
+	families := append([]quota.FamilyQuota(nil), a.liveQuota.Families...)
 	a.accountNotice = "正在保存当前登录账号…"
 	a.invalidateVisible()
 	go func() {
 		defer a.acctBusy.Store(false)
 		ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
-		err := accounts.SnapshotCurrentFromVscdb(ctx, email, name, tier)
+		err := accounts.SnapshotCurrentFromVscdb(ctx, email, name, tier, families...)
 		cancel()
 		mygo.RunOnMain(func() {
 			if err != nil {

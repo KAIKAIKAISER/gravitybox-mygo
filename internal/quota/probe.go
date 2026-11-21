@@ -8,11 +8,14 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
+	"path/filepath"
 	"regexp"
 	"sort"
 	"strings"
 	"time"
 
+	"gravitybox-mygo/internal/config"
 	"gravitybox-mygo/internal/win32"
 )
 
@@ -50,8 +53,22 @@ type LiveStatus struct {
 	ProbedAt  time.Time
 }
 
+type daemonHubFile struct {
+	PID       uint32 `json:"pid"`
+	HTTPSPort int    `json:"httpsPort"`
+	HTTPPort  int    `json:"httpPort"`
+	LSVersion string `json:"lsVersion"`
+	CSRFToken string `json:"csrfToken"`
+}
+
 // ProbeLive queries the running local Antigravity Language Server over loopback HTTPS/HTTP.
 func ProbeLive(ctx context.Context) LiveStatus {
+	// Antigravity 2.34+ writes active pid/ports/csrfToken to ~/.gemini/antigravity/daemon/hub_*.json
+	// instead of passing --csrf_token on the language_server CLI.
+	if st, ok := probeViaDaemonHubFiles(ctx); ok {
+		return st
+	}
+
 	procs, err := win32.FindLanguageServerProcesses(ctx)
 	if err != nil || len(procs) == 0 {
 		return LiveStatus{Error: "未检测到运行中的 language_server 进程", ProbedAt: time.Now()}
@@ -81,58 +98,128 @@ func ProbeLive(ctx context.Context) LiveStatus {
 	return LiveStatus{Error: "未能连接本地 Language Server 配额端口", ProbedAt: time.Now()}
 }
 
-func probePort(ctx context.Context, port int, csrf string) (LiveStatus, bool) {
-	for _, scheme := range []string{"https", "http"} {
-		body, err := localRPC(ctx, scheme, port, "/exa.language_server_pb.LanguageServerService/GetUserStatus", csrf, `{}`)
+func probeViaDaemonHubFiles(ctx context.Context) (LiveStatus, bool) {
+	daemonDir := filepath.Join(config.GeminiDir(), "antigravity", "daemon")
+	entries, err := os.ReadDir(daemonDir)
+	if err != nil {
+		return LiveStatus{}, false
+	}
+
+	procs, _ := win32.ListProcesses()
+	activePIDs := make(map[uint32]bool, len(procs))
+	for _, p := range procs {
+		if strings.HasPrefix(strings.ToLower(p.Name), "language_server") {
+			activePIDs[p.PID] = true
+		}
+	}
+	if len(activePIDs) == 0 {
+		return LiveStatus{}, false
+	}
+
+	type hubCand struct {
+		hub   daemonHubFile
+		mtime int64
+	}
+	var cands []hubCand
+	for _, ent := range entries {
+		name := ent.Name()
+		if ent.IsDir() || !strings.HasPrefix(name, "hub_") || !strings.HasSuffix(name, ".json") {
+			continue
+		}
+		raw, err := os.ReadFile(filepath.Join(daemonDir, name))
 		if err != nil {
 			continue
 		}
-		var parsed struct {
-			UserStatus struct {
-				Email    string `json:"email"`
-				Name     string `json:"name"`
-				UserTier struct {
-					ID   string `json:"id"`
-					Name string `json:"name"`
-				} `json:"userTier"`
-				PlanStatus struct {
-					PlanInfo struct {
-						PlanName string `json:"planName"`
-					} `json:"planInfo"`
-				} `json:"planStatus"`
-				CascadeModelConfigData struct {
-					ClientModelConfigs []struct {
-						Label     string `json:"label"`
-						QuotaInfo *struct {
-							RemainingFraction *float64 `json:"remainingFraction"`
-							ResetTime         string   `json:"resetTime"`
-						} `json:"quotaInfo"`
-					} `json:"clientModelConfigs"`
-				} `json:"cascadeModelConfigData"`
-			} `json:"userStatus"`
-		}
-		if json.Unmarshal(body, &parsed) != nil || parsed.UserStatus.Email == "" {
+		var hub daemonHubFile
+		if json.Unmarshal(raw, &hub) != nil || hub.CSRFToken == "" || !activePIDs[hub.PID] {
 			continue
 		}
+		var mt int64
+		if info, err := ent.Info(); err == nil {
+			mt = info.ModTime().UnixNano()
+		}
+		cands = append(cands, hubCand{hub: hub, mtime: mt})
+	}
+	if len(cands) == 0 {
+		return LiveStatus{}, false
+	}
+	sort.Slice(cands, func(i, j int) bool {
+		return cands[i].mtime > cands[j].mtime
+	})
 
-		st := LiveStatus{
-			Connected: true,
-			Email:     parsed.UserStatus.Email,
-			Name:      parsed.UserStatus.Name,
-			Tier:      resolveTier(parsed.UserStatus.UserTier.ID, parsed.UserStatus.UserTier.Name, parsed.UserStatus.PlanStatus.PlanInfo.PlanName),
-			ProbedAt:  time.Now(),
+	for _, cand := range cands {
+		if cand.hub.HTTPSPort > 0 {
+			if st, ok := probePortScheme(ctx, "https", cand.hub.HTTPSPort, cand.hub.CSRFToken); ok {
+				return st, true
+			}
 		}
-
-		if summaryRaw, err := localRPC(ctx, scheme, port, "/exa.language_server_pb.LanguageServerService/RetrieveUserQuotaSummary", csrf, `{}`); err == nil {
-			st.Families = parseQuotaSummary(summaryRaw)
+		if cand.hub.HTTPPort > 0 {
+			if st, ok := probePortScheme(ctx, "http", cand.hub.HTTPPort, cand.hub.CSRFToken); ok {
+				return st, true
+			}
 		}
-		if len(st.Families) == 0 {
-			st.Families = parseClientModelQuotas(parsed.UserStatus.CascadeModelConfigData.ClientModelConfigs)
-		}
-		st.Windows = buildQuotaWindows(st.Families)
-		return st, true
 	}
 	return LiveStatus{}, false
+}
+
+func probePort(ctx context.Context, port int, csrf string) (LiveStatus, bool) {
+	for _, scheme := range []string{"https", "http"} {
+		if st, ok := probePortScheme(ctx, scheme, port, csrf); ok {
+			return st, true
+		}
+	}
+	return LiveStatus{}, false
+}
+
+func probePortScheme(ctx context.Context, scheme string, port int, csrf string) (LiveStatus, bool) {
+	body, err := localRPC(ctx, scheme, port, "/exa.language_server_pb.LanguageServerService/GetUserStatus", csrf, `{}`)
+	if err != nil {
+		return LiveStatus{}, false
+	}
+	var parsed struct {
+		UserStatus struct {
+			Email    string `json:"email"`
+			Name     string `json:"name"`
+			UserTier struct {
+				ID   string `json:"id"`
+				Name string `json:"name"`
+			} `json:"userTier"`
+			PlanStatus struct {
+				PlanInfo struct {
+					PlanName string `json:"planName"`
+				} `json:"planInfo"`
+			} `json:"planStatus"`
+			CascadeModelConfigData struct {
+				ClientModelConfigs []struct {
+					Label     string `json:"label"`
+					QuotaInfo *struct {
+						RemainingFraction *float64 `json:"remainingFraction"`
+						ResetTime         string   `json:"resetTime"`
+					} `json:"quotaInfo"`
+				} `json:"clientModelConfigs"`
+			} `json:"cascadeModelConfigData"`
+		} `json:"userStatus"`
+	}
+	if json.Unmarshal(body, &parsed) != nil || parsed.UserStatus.Email == "" {
+		return LiveStatus{}, false
+	}
+
+	st := LiveStatus{
+		Connected: true,
+		Email:     parsed.UserStatus.Email,
+		Name:      parsed.UserStatus.Name,
+		Tier:      resolveTier(parsed.UserStatus.UserTier.ID, parsed.UserStatus.UserTier.Name, parsed.UserStatus.PlanStatus.PlanInfo.PlanName),
+		ProbedAt:  time.Now(),
+	}
+
+	if summaryRaw, err := localRPC(ctx, scheme, port, "/exa.language_server_pb.LanguageServerService/RetrieveUserQuotaSummary", csrf, `{}`); err == nil {
+		st.Families = parseQuotaSummary(summaryRaw)
+	}
+	if len(st.Families) == 0 {
+		st.Families = parseClientModelQuotas(parsed.UserStatus.CascadeModelConfigData.ClientModelConfigs)
+	}
+	st.Windows = buildQuotaWindows(st.Families)
+	return st, true
 }
 
 // NormalizeFamilyName maps raw provider group labels into compact UI labels.

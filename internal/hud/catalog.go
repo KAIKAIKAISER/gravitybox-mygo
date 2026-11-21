@@ -58,11 +58,11 @@ type modelCatalogFile struct {
 }
 
 type pricingFeedFile struct {
-	Models     map[string]PriceRule `json:"models"`
-	Prices     map[string]PriceRule `json:"prices"`
-	Aliases    map[string]string    `json:"aliases"`
-	Names      map[string]string    `json:"names"`
-	Capacities map[string]int64     `json:"capacities"`
+	Models     map[string]json.RawMessage `json:"models"`
+	Prices     map[string]json.RawMessage `json:"prices"`
+	Aliases    map[string]string          `json:"aliases"`
+	Names      map[string]string          `json:"names"`
+	Capacities map[string]int64           `json:"capacities"`
 }
 
 type familyRule struct {
@@ -173,12 +173,49 @@ func mergeFeedBytes(raw []byte) {
 			catAliases[strings.ToLower(k)] = strings.ToLower(v)
 		}
 	}
-	for k, v := range feed.Models {
-		catPrices[strings.ToLower(k)] = normalizePriceRule(v)
+	for k, rawEntry := range feed.Models {
+		if pr, ok := parsePriceEntry(k, rawEntry); ok {
+			catPrices[strings.ToLower(k)] = pr
+		}
 	}
-	for k, v := range feed.Prices {
-		catPrices[strings.ToLower(k)] = normalizePriceRule(v)
+	for k, rawEntry := range feed.Prices {
+		if pr, ok := parsePriceEntry(k, rawEntry); ok {
+			catPrices[strings.ToLower(k)] = pr
+		}
 	}
+}
+
+func parsePriceEntry(modelKey string, raw json.RawMessage) (PriceRule, bool) {
+	trimmed := strings.TrimSpace(string(raw))
+	if trimmed == "" {
+		return PriceRule{}, false
+	}
+	if strings.HasPrefix(trimmed, "[") {
+		var ivs []pricingInterval
+		if json.Unmarshal(raw, &ivs) != nil || len(ivs) == 0 {
+			return PriceRule{}, false
+		}
+		pr := PriceRule{
+			Model:      modelKey,
+			Input:      ivs[0].Input,
+			Output:     ivs[0].Output,
+			Cached:     ivs[0].Cached,
+			CacheWrite: ivs[0].CacheWrite,
+			Intervals:  ivs,
+		}
+		return normalizePriceRule(pr), true
+	}
+	var pr PriceRule
+	if json.Unmarshal(raw, &pr) != nil {
+		return PriceRule{}, false
+	}
+	if pr.Input == 0 && pr.Output == 0 && pr.Cached == 0 && len(pr.Intervals) == 0 {
+		return PriceRule{}, false
+	}
+	if pr.Model == "" {
+		pr.Model = modelKey
+	}
+	return normalizePriceRule(pr), true
 }
 
 func normalizePriceRule(p PriceRule) PriceRule {
