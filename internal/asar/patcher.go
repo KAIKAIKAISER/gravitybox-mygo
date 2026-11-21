@@ -83,28 +83,58 @@ type ApplyResult struct {
 	Message      string
 }
 
-// LoadZhPack loads embedded assets/zh-pack.json (or a newer remote-synced override in stateDir).
+// LoadZhPack loads embedded assets/zh-pack.json, or a newer remote-synced override in stateDir.
 func LoadZhPack(stateDir string) (*ZhPackSpec, error) {
+	var bundled *ZhPackSpec
+	var bundledErr error
+	if raw, err := resources.ReadFile("assets/zh-pack.json"); err != nil {
+		bundledErr = err
+	} else {
+		var p ZhPackSpec
+		if err := json.Unmarshal(raw, &p); err != nil {
+			bundledErr = err
+		} else if p.Schema != 1 || len(p.Entries) == 0 || !strings.Contains(p.RuntimeTemplate, "{{MAP_JSON}}") {
+			bundledErr = errors.New("invalid embedded zh-pack.json")
+		} else {
+			bundled = &p
+		}
+	}
+
 	if stateDir != "" {
 		if raw, err := os.ReadFile(filepath.Join(stateDir, "zh-pack-latest.json")); err == nil {
-			var p ZhPackSpec
-			if json.Unmarshal(raw, &p) == nil && p.Schema == 1 && len(p.Entries) > 0 && strings.Contains(p.RuntimeTemplate, "{{MAP_JSON}}") {
-				return &p, nil
+			var remote ZhPackSpec
+			if json.Unmarshal(raw, &remote) == nil && remote.Schema == 1 && len(remote.Entries) > 0 && strings.Contains(remote.RuntimeTemplate, "{{MAP_JSON}}") {
+				if bundled == nil || isNewerZhPack(&remote, bundled) {
+					return &remote, nil
+				}
 			}
 		}
 	}
-	raw, err := resources.ReadFile("assets/zh-pack.json")
-	if err != nil {
-		return nil, err
+
+	if bundled == nil {
+		return nil, bundledErr
 	}
-	var p ZhPackSpec
-	if err := json.Unmarshal(raw, &p); err != nil {
-		return nil, err
+	return bundled, nil
+}
+
+func isNewerZhPack(candidate, baseline *ZhPackSpec) bool {
+	ct, cErr := parsePackTime(candidate.UpdatedAt)
+	bt, bErr := parsePackTime(baseline.UpdatedAt)
+	if cErr == nil && bErr == nil && !ct.Equal(bt) {
+		return ct.After(bt)
 	}
-	if p.Schema != 1 || len(p.Entries) == 0 || !strings.Contains(p.RuntimeTemplate, "{{MAP_JSON}}") {
-		return nil, errors.New("invalid embedded zh-pack.json")
+	return len(candidate.Entries) > len(baseline.Entries)
+}
+
+func parsePackTime(raw string) (time.Time, error) {
+	s := strings.TrimSpace(raw)
+	if s == "" {
+		return time.Time{}, errors.New("empty time")
 	}
-	return &p, nil
+	if t, err := time.Parse(time.RFC3339Nano, s); err == nil {
+		return t, nil
+	}
+	return time.Parse(time.RFC3339, s)
 }
 
 // CompileRuntime renders the standalone preload/hot-inject script from ZhPackSpec.
@@ -647,24 +677,7 @@ type ZhPackInfo struct {
 // GetZhPackInfo returns metadata for the currently active zh-pack (remote-synced or bundled).
 func GetZhPackInfo(stateDir string) ZhPackInfo {
 	source := "KAIKAIKAISER/antigravity-zh-asar"
-	if stateDir != "" {
-		if raw, err := os.ReadFile(filepath.Join(stateDir, "zh-pack-latest.json")); err == nil {
-			var p ZhPackSpec
-			if json.Unmarshal(raw, &p) == nil && p.Schema == 1 && len(p.Entries) > 0 {
-				cnt := p.EntriesCount
-				if cnt == 0 {
-					cnt = len(p.Entries)
-				}
-				return ZhPackInfo{
-					AppVersion:   p.AppVersion,
-					EntriesCount: cnt,
-					UpdatedAt:    formatPackTime(p.UpdatedAt),
-					Source:       source,
-				}
-			}
-		}
-	}
-	pack, err := LoadZhPack("")
+	pack, err := LoadZhPack(stateDir)
 	if err != nil {
 		return ZhPackInfo{Source: source}
 	}

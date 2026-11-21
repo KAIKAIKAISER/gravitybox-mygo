@@ -89,3 +89,62 @@ func TestOpenAndPatchAsarRoundTrip(t *testing.T) {
 		t.Fatalf("tag mismatch: %q, err=%v", string(gotTag), err)
 	}
 }
+
+func TestLoadZhPackPrefersNewerBundledOverStaleRemote(t *testing.T) {
+	bundled, err := LoadZhPack("")
+	if err != nil {
+		t.Fatalf("LoadZhPack bundled failed: %v", err)
+	}
+	if bundled.AppVersion != "2.34.0" || len(bundled.Entries) < 3800 {
+		t.Fatalf("unexpected bundled pack: version=%q entries=%d", bundled.AppVersion, len(bundled.Entries))
+	}
+
+	dir := t.TempDir()
+	stale := ZhPackSpec{
+		Schema:          1,
+		AppVersion:      "2.32.2",
+		UpdatedAt:       "2026-01-01T00:00:00Z",
+		EntriesCount:    1,
+		Entries:         map[string]string{"Hello": "你好"},
+		RuntimeTemplate: "const m={{MAP_JSON}};",
+	}
+	staleBytes, err := json.Marshal(stale)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "zh-pack-latest.json"), staleBytes, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := LoadZhPack(dir)
+	if err != nil {
+		t.Fatalf("LoadZhPack with stale remote failed: %v", err)
+	}
+	if got.AppVersion != bundled.AppVersion || len(got.Entries) != len(bundled.Entries) {
+		t.Fatalf("expected bundled pack (%s, %d), got (%s, %d)", bundled.AppVersion, len(bundled.Entries), got.AppVersion, len(got.Entries))
+	}
+
+	newer := ZhPackSpec{
+		Schema:          1,
+		AppVersion:      "2.99.0",
+		UpdatedAt:       "2099-01-01T00:00:00Z",
+		EntriesCount:    2,
+		Entries:         map[string]string{"Hello": "你好", "World": "世界"},
+		RuntimeTemplate: "const m={{MAP_JSON}};",
+	}
+	newerBytes, err := json.Marshal(newer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "zh-pack-latest.json"), newerBytes, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	got2, err := LoadZhPack(dir)
+	if err != nil {
+		t.Fatalf("LoadZhPack with newer remote failed: %v", err)
+	}
+	if got2.AppVersion != "2.99.0" || len(got2.Entries) != 2 {
+		t.Fatalf("expected newer remote pack, got (%s, %d)", got2.AppVersion, len(got2.Entries))
+	}
+}
