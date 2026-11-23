@@ -177,7 +177,7 @@
           : boxRect
           ? boxRect.left + boxRect.width / 2
           : 0;
-      const ttW = tt.offsetWidth || tt.getBoundingClientRect().width || 332;
+      const ttW = tt.offsetWidth || tt.getBoundingClientRect().width || 376;
       const vw = window.innerWidth || document.documentElement.clientWidth || 1280;
       const vh = window.innerHeight || document.documentElement.clientHeight || 800;
       const left = Math.max(12, Math.min(Math.round(anchorLeft - ttW / 2), vw - ttW - 12));
@@ -503,8 +503,8 @@
     const isDetailed =
       boot.telemetryLayout === 'detailed' ||
       Boolean(boot.userConfig && boot.userConfig.telemetryLayout === 'detailed');
-    const neededWidth = measuredTextWidth > 24 ? measuredTextWidth + 20 : 204;
-    const threshold = prevMode === 'middle' ? Math.max(168, neededWidth) : Math.max(202, neededWidth + 24);
+    const neededWidth = measuredTextWidth > 24 ? measuredTextWidth + 24 : 228;
+    const threshold = prevMode === 'middle' ? Math.max(188, neededWidth) : Math.max(228, neededWidth + 24);
     const mode = !isDetailed && rowWidth > 0 && freeWidth >= threshold ? 'middle' : 'bottom';
     const sig = mode + ':' + Math.round(rowWidth / 8) + ':' + Math.round(neededWidth / 16);
 

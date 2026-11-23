@@ -13,10 +13,10 @@ body[data-agy-font="inter"],
 body[data-agy-font] :where(.font-sans),
 body[data-agy-theme] :where(.font-mono),
 body[data-agy-font] :where(.font-mono) {
-  --vscode-font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei UI', 'Microsoft YaHei', system-ui, sans-serif !important;
-  --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei UI', 'Microsoft YaHei', system-ui, sans-serif !important;
+  --vscode-font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Microsoft YaHei UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', sans-serif !important;
+  --font-sans: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Microsoft YaHei UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', sans-serif !important;
   --default-font-family: var(--font-sans) !important;
-  --font-mono: 'SF Mono', 'Fira Code', Menlo, Monaco, ui-monospace, SFMono-Regular, 'PingFang SC', Consolas, monospace !important;
+  --font-mono: ui-monospace, 'Cascadia Mono', 'Cascadia Code', Consolas, 'SF Mono', 'Fira Code', Menlo, Monaco, 'Microsoft YaHei UI', 'PingFang SC', monospace !important;
   --editor-font-family: var(--font-mono) !important;
   --default-mono-font-family: var(--font-mono) !important;
   --font-weight-light: 300 !important;
