@@ -699,12 +699,115 @@ func (a *App) settingsPage(c *mygoui.Context) {
 			a.iconBadge(c, svgHud, mygoui.RGBA(139, 92, 246, 0.12), mygoui.RGB(139, 92, 246))
 			mygoui.Column(c).Grow(1).Gap(2).Children(func() {
 				mygoui.Text(c, "对话状态栏").FontSize(14).Bold()
-				mygoui.Text(c, "在 Antigravity 输入框下方显示轮次、Token 与上下文").FontSize(12).TextColor(t.TextMuted)
+				mygoui.Text(c, "在 Antigravity 输入框工具栏显示实时速度、上下文、缓存命中与四态指示").FontSize(12).TextColor(t.TextMuted)
 			})
 			if mygoui.Switch(c, &a.cfg.HudEnabled).Label("对话状态栏").Changed() {
 				a.saveConfig()
 			}
 		})
+		if a.cfg.HudEnabled {
+			mygoui.Divider(c)
+			mygoui.Row(c).Gap(12).AlignItems(mygoui.Center).Children(func() {
+				mygoui.Column(c).Grow(1).Gap(2).Children(func() {
+					mygoui.Text(c, "状态栏布局").FontSize(13).Bold()
+					mygoui.Text(c, "紧凑模式在宽屏下嵌入中段工具栏，详细模式独立显示 TTFT 与 Out").FontSize(12).TextColor(t.TextMuted)
+				})
+				layouts := []string{"紧凑 (默认)", "详细 (含 TTFT/Out)"}
+				if mygoui.Select(c, &a.selectedHudLayout, layouts).Label("状态栏布局").Changed() {
+					a.cfg.TelemetryLayout = hudLayoutFromLabel(a.selectedHudLayout)
+					a.saveConfig()
+				}
+			})
+			mygoui.Divider(c)
+			mygoui.Row(c).Gap(12).AlignItems(mygoui.Center).Children(func() {
+				mygoui.Column(c).Grow(1).Gap(2).Children(func() {
+					mygoui.Text(c, "缓存命中口径").FontSize(13).Bold()
+					mygoui.Text(c, "控制紧凑状态栏 Cache % 显示会话累计或当前单步命中率").FontSize(12).TextColor(t.TextMuted)
+				})
+				modes := []string{"会话累计命中率", "当前步命中率"}
+				if mygoui.Select(c, &a.selectedCacheMode, modes).Label("缓存命中口径").Changed() {
+					a.cfg.TelemetryCacheMode = cacheModeFromLabel(a.selectedCacheMode)
+					a.saveConfig()
+				}
+			})
+			mygoui.Divider(c)
+			mygoui.Row(c).Gap(12).AlignItems(mygoui.Center).Children(func() {
+				mygoui.Column(c).Grow(1).Gap(2).Children(func() {
+					mygoui.Text(c, "上下文窗口上限").FontSize(13).Bold()
+					mygoui.Text(c, "默认从会话数据库自动读取模型真实上下文容量").FontSize(12).TextColor(t.TextMuted)
+				})
+				limits := []string{"自动识别", "256k", "512k", "1M", "2M"}
+				if mygoui.Select(c, &a.selectedCtxLimit, limits).Label("上下文窗口上限").Changed() {
+					a.cfg.ManualContextLimit = ctxLimitFromLabel(a.selectedCtxLimit)
+					a.saveConfig()
+				}
+			})
+		}
+	})
+
+	mygoui.Text(c, "主题外观").FontSize(12).TextColor(t.TextMuted)
+	a.card(c, "", func() {
+		mygoui.Row(c).Gap(12).AlignItems(mygoui.Center).Children(func() {
+			a.iconBadge(c, svgPalette, mygoui.RGBA(43, 127, 255, 0.12), mygoui.RGB(43, 127, 255))
+			mygoui.Column(c).Grow(1).Gap(2).Children(func() {
+				mygoui.Text(c, "GravityBox 界面外观").FontSize(14).Bold()
+				mygoui.Text(c, "切换 GravityBox 主窗口与托盘面板的浅色/深色外观").FontSize(12).TextColor(t.TextMuted)
+			})
+			appThemes := []string{"跟随系统", "浅色", "深色"}
+			if mygoui.Select(c, &a.selectedAppTheme, appThemes).Label("GravityBox 界面外观").Changed() {
+				a.cfg.AppTheme = appThemeFromLabel(a.selectedAppTheme)
+				a.saveConfig()
+			}
+		})
+		mygoui.Divider(c)
+		mygoui.Row(c).Gap(12).AlignItems(mygoui.Center).Children(func() {
+			a.iconBadge(c, svgPalette, mygoui.RGBA(16, 185, 129, 0.12), mygoui.RGB(5, 150, 105))
+			mygoui.Column(c).Grow(1).Gap(2).Children(func() {
+				mygoui.Text(c, "Antigravity Codex 昼夜主题").FontSize(14).Bold()
+				mygoui.Text(c, "注入 Codex 纯白浅色 / 炭灰深色配色、双层圆角输入框与界面排版优化").FontSize(12).TextColor(t.TextMuted)
+			})
+			if mygoui.Switch(c, &a.cfg.CodexThemeEnabled).Label("Antigravity Codex 昼夜主题").Changed() {
+				a.saveConfig()
+			}
+		})
+		if a.cfg.CodexThemeEnabled {
+			mygoui.Divider(c)
+			mygoui.Row(c).Gap(12).AlignItems(mygoui.Center).Children(func() {
+				mygoui.Column(c).Grow(1).Gap(2).Children(func() {
+					mygoui.Text(c, "Codex 主题模式").FontSize(13).Bold()
+					mygoui.Text(c, "默认随 Antigravity 明暗自动切换，也可固定纯白浅色或炭灰深色").FontSize(12).TextColor(t.TextMuted)
+				})
+				presets := []string{"自动跟随 IDE", "Codex 纯白浅色", "Codex 炭灰深色"}
+				if mygoui.Select(c, &a.selectedCodexPreset, presets).Label("Codex 主题模式").Changed() {
+					a.cfg.CodexThemePreset = codexPresetFromLabel(a.selectedCodexPreset)
+					a.saveConfig()
+				}
+			})
+			mygoui.Divider(c)
+			mygoui.Row(c).Gap(12).AlignItems(mygoui.Center).Children(func() {
+				mygoui.Column(c).Grow(1).Gap(2).Children(func() {
+					mygoui.Text(c, "主题强调色").FontSize(13).Bold()
+					mygoui.Text(c, "同步应用于 GravityBox 与 Antigravity 主按钮及选区高亮").FontSize(12).TextColor(t.TextMuted)
+				})
+				accents := []string{"经典蓝", "翡翠绿", "靛青紫", "琥珀金"}
+				if mygoui.Select(c, &a.selectedAccent, accents).Label("主题强调色").Changed() {
+					a.cfg.AccentColor = accentFromLabel(a.selectedAccent)
+					a.saveConfig()
+				}
+			})
+			mygoui.Divider(c)
+			mygoui.Row(c).Gap(12).AlignItems(mygoui.Center).Children(func() {
+				mygoui.Column(c).Grow(1).Gap(2).Children(func() {
+					mygoui.Text(c, "对话正文字号").FontSize(13).Bold()
+					mygoui.Text(c, "覆盖 Antigravity 对话消息正文显示字号").FontSize(12).TextColor(t.TextMuted)
+				})
+				fonts := []string{"默认", "14px", "15px", "16px"}
+				if mygoui.Select(c, &a.selectedChatFont, fonts).Label("对话正文字号").Changed() {
+					a.cfg.ChatFontSize = chatFontFromLabel(a.selectedChatFont)
+					a.saveConfig()
+				}
+			})
+		}
 	})
 
 	mygoui.Text(c, "配额与计价").FontSize(12).TextColor(t.TextMuted)
@@ -934,7 +1037,7 @@ func (a *App) card(c *mygoui.Context, title string, body func()) {
 	borderCol := mygoui.RGBA(15, 23, 42, 0.08)
 	shadowCol := mygoui.RGBA(15, 23, 42, 0.05)
 	if t.Dark {
-		cardBg = mygoui.RGB(30, 34, 43)
+		cardBg = mygoui.RGB(35, 35, 35)
 		borderCol = mygoui.RGBA(255, 255, 255, 0.08)
 		shadowCol = mygoui.RGBA(0, 0, 0, 0.25)
 	}

@@ -232,6 +232,8 @@ type MetricsEngine struct {
 	summariesDbPath  string
 	mu               sync.Mutex
 	cache            map[string]*cachedDbState
+	codexInc         map[string]*codexIncrementalState
+	codexCache       map[string]*codexCachedEntry
 }
 
 // NewMetricsEngine creates a HUD metrics engine backed by Antigravity's conversation SQLite stores.

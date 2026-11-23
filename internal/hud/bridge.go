@@ -5,22 +5,29 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"gravitybox-mygo/internal/config"
 )
 
 const (
-	// BridgeBindingName is the CDP Runtime.addBinding name exposed to GravityBox isolated world.
+	// BridgeBindingName is the legacy HUD bridge binding name kept for compatibility.
 	BridgeBindingName     = "__gravityboxHudBridge"
 	activityGraceWindowMs = 15_000
+	codexMaxWatchedCids   = 6
 )
 
-// PushFunc evaluates an expression inside a CDP target's isolated world.
+// PushFunc evaluates an expression inside a CDP target's execution context.
 type PushFunc = func(ctx context.Context, expr string) (bool, error)
 
-// ClientEvent is the event JSON sent from runtime/hud-instance.js via window.__gravityboxHudBridge.
+// EvalStringFunc evaluates an expression returning a string value (used for Main World telemetry discovery).
+type EvalStringFunc = func(ctx context.Context, expr string) (string, error)
+
+// ClientEvent is the event JSON sent from legacy runtime/hud-instance.js via window.__gravityboxHudBridge.
 type ClientEvent struct {
 	Type                 string   `json:"type"`
 	ConversationID       string   `json:"conversationId"`
@@ -53,13 +60,34 @@ type activePane struct {
 	lastFingerprint      string
 }
 
-// Bridge manages bidirectional HUD events & real-time metrics streaming across attached Antigravity panes.
+type pushedSessionState struct {
+	hash          string
+	pendingActive bool
+}
+
+type codexTargetState struct {
+	targetID       string
+	pushMain       PushFunc
+	evalMain       EvalStringFunc
+	watchedIDs     []string
+	pushedSessions map[string]pushedSessionState
+	lastPollMs     int64
+	lastHbPushMs   int64
+}
+
+// Bridge manages bidirectional HUD events & real-time Codex telemetry streaming across Antigravity panes.
 type Bridge struct {
 	engine  *MetricsEngine
 	mu      sync.Mutex
 	targets map[string]PushFunc
 	panes   map[string]*activePane
+	codex   map[string]*codexTargetState
 	seq     atomic.Int64
+
+	telemetryLayout    string
+	telemetryCacheMode string
+	manualContextLimit int64
+	lsLogFile          string
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -69,11 +97,15 @@ type Bridge struct {
 func NewBridge(engine *MetricsEngine) *Bridge {
 	ctx, cancel := context.WithCancel(context.Background())
 	b := &Bridge{
-		engine:  engine,
-		targets: make(map[string]PushFunc),
-		panes:   make(map[string]*activePane),
-		ctx:     ctx,
-		cancel:  cancel,
+		engine:             engine,
+		targets:            make(map[string]PushFunc),
+		panes:              make(map[string]*activePane),
+		codex:              make(map[string]*codexTargetState),
+		telemetryLayout:    "compact",
+		telemetryCacheMode: "session",
+		lsLogFile:          config.AntigravityLogFile(),
+		ctx:                ctx,
+		cancel:             cancel,
 	}
 	b.seq.Store(time.Now().UnixMilli())
 	go b.pollLoop()
@@ -85,7 +117,38 @@ func (b *Bridge) Stop() {
 	b.cancel()
 }
 
-// AttachTarget registers a CDP page evaluation callback for pushing HUD updates.
+// UpdateTelemetryConfig updates live layout, cache rate mode, and manual context limit settings.
+func (b *Bridge) UpdateTelemetryConfig(layout, cacheMode string, manualContextLimit int) {
+	if layout != "detailed" {
+		layout = "compact"
+	}
+	if cacheMode != "step" {
+		cacheMode = "session"
+	}
+	if manualContextLimit < 0 {
+		manualContextLimit = 0
+	}
+
+	b.mu.Lock()
+	changed := b.telemetryLayout != layout ||
+		b.telemetryCacheMode != cacheMode ||
+		b.manualContextLimit != int64(manualContextLimit)
+	b.telemetryLayout = layout
+	b.telemetryCacheMode = cacheMode
+	b.manualContextLimit = int64(manualContextLimit)
+	if changed {
+		for _, ts := range b.codex {
+			ts.pushedSessions = make(map[string]pushedSessionState)
+		}
+	}
+	b.mu.Unlock()
+
+	if changed {
+		go b.RefreshAll()
+	}
+}
+
+// AttachTarget registers a CDP page evaluation callback for pushing legacy isolated-world HUD updates.
 func (b *Bridge) AttachTarget(targetID string, push PushFunc) {
 	b.mu.Lock()
 	b.targets[targetID] = push
@@ -98,10 +161,28 @@ func (b *Bridge) AttachTarget(targetID string, push PushFunc) {
 	b.mu.Unlock()
 }
 
+// AttachCodexTarget registers Main World evaluation callbacks for Codex telemetry pushing & discovery.
+func (b *Bridge) AttachCodexTarget(targetID string, pushMain PushFunc, evalMain EvalStringFunc) {
+	b.mu.Lock()
+	ts := b.codex[targetID]
+	if ts == nil {
+		ts = &codexTargetState{
+			targetID:       targetID,
+			pushedSessions: make(map[string]pushedSessionState),
+		}
+		b.codex[targetID] = ts
+	}
+	ts.pushMain = pushMain
+	ts.evalMain = evalMain
+	ts.pushedSessions = make(map[string]pushedSessionState)
+	b.mu.Unlock()
+}
+
 // DetachTarget removes a CDP target and its tracked panes.
 func (b *Bridge) DetachTarget(targetID string) {
 	b.mu.Lock()
 	delete(b.targets, targetID)
+	delete(b.codex, targetID)
 	prefix := targetID + "::"
 	for k := range b.panes {
 		if strings.HasPrefix(k, prefix) {
@@ -111,17 +192,64 @@ func (b *Bridge) DetachTarget(targetID string) {
 	b.mu.Unlock()
 }
 
-// RefreshAll clears pane fingerprints and pushes fresh HUD metrics immediately.
+// RefreshAll clears pane fingerprints & pushed session hashes and pushes fresh telemetry immediately.
 func (b *Bridge) RefreshAll() {
 	b.mu.Lock()
-	keys := make([]string, 0, len(b.panes))
+	paneKeys := make([]string, 0, len(b.panes))
 	for k, p := range b.panes {
 		p.lastFingerprint = ""
-		keys = append(keys, k)
+		paneKeys = append(paneKeys, k)
+	}
+	codexIDs := make([]string, 0, len(b.codex))
+	for id, ts := range b.codex {
+		ts.pushedSessions = make(map[string]pushedSessionState)
+		codexIDs = append(codexIDs, id)
 	}
 	b.mu.Unlock()
-	for _, k := range keys {
+
+	for _, k := range paneKeys {
 		b.refreshPane(k, true)
+	}
+	for _, id := range codexIDs {
+		b.syncCodexTarget(id, true)
+	}
+}
+
+// RefreshTarget immediately syncs Codex telemetry for a single target (e.g. after Main World bundle injection).
+func (b *Bridge) RefreshTarget(targetID string) {
+	b.syncCodexTarget(targetID, true)
+}
+
+// HandleRequestMetrics processes window.__agRequestMetrics(payload) binding calls from 50-telemetry-ui.js.
+func (b *Bridge) HandleRequestMetrics(targetID, rawPayload string) {
+	watched := parseCascadeIDList(rawPayload)
+
+	b.mu.Lock()
+	ts := b.codex[targetID]
+	if ts == nil {
+		ts = &codexTargetState{
+			targetID:       targetID,
+			pushedSessions: make(map[string]pushedSessionState),
+		}
+		b.codex[targetID] = ts
+	}
+	ts.watchedIDs = watched
+	watchedSet := make(map[string]bool, len(watched))
+	for _, cid := range watched {
+		watchedSet[cid] = true
+		if prev, ok := ts.pushedSessions[cid]; ok {
+			ts.pushedSessions[cid] = pushedSessionState{hash: "", pendingActive: prev.pendingActive}
+		}
+	}
+	for k := range ts.pushedSessions {
+		if !watchedSet[k] {
+			delete(ts.pushedSessions, k)
+		}
+	}
+	b.mu.Unlock()
+
+	if len(watched) > 0 {
+		go b.syncCodexTarget(targetID, true)
 	}
 }
 
@@ -258,7 +386,7 @@ func (b *Bridge) HandleBindingPayload(targetID, rawPayload string) {
 func (b *Bridge) pollLoop() {
 	ticker := time.NewTicker(250 * time.Millisecond)
 	defer ticker.Stop()
-	var lastPollMs int64
+	var lastLegacyPollMs int64
 
 	for {
 		select {
@@ -266,34 +394,229 @@ func (b *Bridge) pollLoop() {
 			return
 		case <-ticker.C:
 			nowMs := time.Now().UnixMilli()
+
 			b.mu.Lock()
-			if len(b.panes) == 0 {
-				b.mu.Unlock()
-				continue
-			}
-			anyActive := false
-			keys := make([]string, 0, len(b.panes))
+			legacyAnyActive := false
+			legacyKeys := make([]string, 0, len(b.panes))
 			for k, p := range b.panes {
-				keys = append(keys, k)
+				legacyKeys = append(legacyKeys, k)
 				if p.isStreaming || p.isSubagentRunning || (nowMs-p.lastActivityAtMs < activityGraceWindowMs) {
-					anyActive = true
+					legacyAnyActive = true
+				}
+			}
+			var dueCodexTargets []string
+			for id, ts := range b.codex {
+				if ts.pushMain == nil {
+					continue
+				}
+				active := false
+				for _, ps := range ts.pushedSessions {
+					if ps.pendingActive {
+						active = true
+						break
+					}
+				}
+				interval := int64(1000)
+				if active {
+					interval = 300
+				}
+				if nowMs-ts.lastPollMs >= interval-20 {
+					ts.lastPollMs = nowMs
+					dueCodexTargets = append(dueCodexTargets, id)
 				}
 			}
 			b.mu.Unlock()
 
-			interval := int64(1000)
-			if anyActive {
-				interval = 300
+			if len(legacyKeys) > 0 {
+				legacyInterval := int64(1000)
+				if legacyAnyActive {
+					legacyInterval = 300
+				}
+				if nowMs-lastLegacyPollMs >= legacyInterval-20 {
+					lastLegacyPollMs = nowMs
+					for _, k := range legacyKeys {
+						b.refreshPane(k, false)
+					}
+				}
 			}
-			if nowMs-lastPollMs < interval-20 {
-				continue
-			}
-			lastPollMs = nowMs
-			for _, k := range keys {
-				b.refreshPane(k, false)
+
+			for _, id := range dueCodexTargets {
+				b.syncCodexTarget(id, false)
 			}
 		}
 	}
+}
+
+func (b *Bridge) syncCodexTarget(targetID string, force bool) {
+	b.mu.Lock()
+	ts := b.codex[targetID]
+	if ts == nil || ts.pushMain == nil {
+		b.mu.Unlock()
+		return
+	}
+	pushMain := ts.pushMain
+	evalMain := ts.evalMain
+	watched := append([]string(nil), ts.watchedIDs...)
+	layout := b.telemetryLayout
+	cacheMode := b.telemetryCacheMode
+	manualLim := b.manualContextLimit
+	lsLogFile := b.lsLogFile
+	lastHb := ts.lastHbPushMs
+	b.mu.Unlock()
+
+	if (len(watched) == 0 || force) && evalMain != nil {
+		const discoverExpr = `(function(){
+			if (typeof window.__ag_get_watched_cascade_ids === 'function') {
+				const list = window.__ag_get_watched_cascade_ids();
+				if (Array.isArray(list)) return JSON.stringify(list);
+			}
+			return '[]';
+		})()`
+		dCtx, dCancel := context.WithTimeout(b.ctx, 1500*time.Millisecond)
+		rawList, err := evalMain(dCtx, discoverExpr)
+		dCancel()
+		if err == nil && rawList != "" {
+			detected := parseCascadeIDList(rawList)
+			if len(detected) > 0 || force {
+				watched = detected
+				b.mu.Lock()
+				if cur := b.codex[targetID]; cur == ts {
+					cur.watchedIDs = detected
+					watchedSet := make(map[string]bool, len(detected))
+					for _, cid := range detected {
+						watchedSet[cid] = true
+					}
+					for k := range cur.pushedSessions {
+						if !watchedSet[k] {
+							delete(cur.pushedSessions, k)
+						}
+					}
+				}
+				b.mu.Unlock()
+			}
+		}
+	}
+
+	nowMs := time.Now().UnixMilli()
+	pushedAny := false
+
+	for _, cid := range watched {
+		b.mu.Lock()
+		cur := b.codex[targetID]
+		if cur != ts {
+			b.mu.Unlock()
+			return
+		}
+		prev := cur.pushedSessions[cid]
+		b.mu.Unlock()
+
+		rawSig := b.engine.GetCodexDbSignature(cid)
+		if rawSig == "" {
+			rawSig = "empty"
+		}
+		lsSig := ""
+		if prev.pendingActive && lsLogFile != "" {
+			lsSig = GetLsLogSig(lsLogFile)
+		}
+		lsSuffix := ""
+		if lsSig != "" {
+			lsSuffix = "|ls:" + lsSig
+		}
+		sessionKey := fmt.Sprintf("%s@%s|lim:%d:256000|ly:%s:%s%s", cid, rawSig, manualLim, layout, cacheMode, lsSuffix)
+		if !force && sessionKey == prev.hash {
+			continue
+		}
+
+		payload := b.engine.ParseConversationCodexMetrics(b.ctx, cid, CodexTelemetryOptions{
+			ManualContextLimit:   manualLim,
+			FallbackContextLimit: 256000,
+			TelemetryLayout:      layout,
+			TelemetryCacheMode:   cacheMode,
+			LsLogFile:            lsLogFile,
+			LsSig:                lsSig,
+		})
+		if payload == nil {
+			continue
+		}
+		toSend := payload
+		if payload.TransientError {
+			if !force || payload.CachedPayload == nil {
+				continue
+			}
+			toSend = payload.CachedPayload
+		}
+
+		rawJSON, err := json.Marshal(toSend)
+		if err != nil {
+			continue
+		}
+		expr := `(window.__ag_last_daemon_hb = Date.now(), window.__ag_render_metrics && window.__ag_render_metrics(` + string(rawJSON) + `), true)`
+		if ok, err := pushMain(b.ctx, expr); err != nil || !ok {
+			continue
+		}
+		pushedAny = true
+
+		if !payload.TransientError {
+			nextPending := payload.Stats != nil && (payload.Stats.GeneratingPending || payload.Stats.CompactingNow || payload.Stats.PendingRetrying)
+			b.mu.Lock()
+			if cur := b.codex[targetID]; cur == ts {
+				cur.pushedSessions[cid] = pushedSessionState{
+					hash:          sessionKey,
+					pendingActive: nextPending,
+				}
+				cur.lastHbPushMs = nowMs
+			}
+			b.mu.Unlock()
+		}
+	}
+
+	if !pushedAny && nowMs-lastHb >= 10_000 {
+		ok, err := pushMain(b.ctx, `((window.__ag_last_daemon_hb = Date.now()), window.__ag_refresh_wait_ui && window.__ag_refresh_wait_ui(), true)`)
+		if err == nil && ok {
+			b.mu.Lock()
+			if cur := b.codex[targetID]; cur == ts {
+				cur.lastHbPushMs = nowMs
+			}
+			b.mu.Unlock()
+		}
+	}
+}
+
+func parseCascadeIDList(raw string) []string {
+	var out []string
+	seen := make(map[string]bool)
+	add := func(s string) {
+		s = strings.TrimSpace(s)
+		if codexUUIDRe.MatchString(s) && !seen[s] {
+			seen[s] = true
+			out = append(out, s)
+		}
+	}
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return nil
+	}
+	if strings.HasPrefix(trimmed, "[") {
+		var list []string
+		if json.Unmarshal([]byte(trimmed), &list) == nil {
+			for _, item := range list {
+				add(item)
+				if len(out) >= codexMaxWatchedCids {
+					break
+				}
+			}
+			return out
+		}
+	}
+	for _, part := range strings.FieldsFunc(trimmed, func(r rune) bool {
+		return r == ',' || r == ' ' || r == '\n' || r == '\r' || r == '\t'
+	}) {
+		add(part)
+		if len(out) >= codexMaxWatchedCids {
+			break
+		}
+	}
+	return out
 }
 
 func (b *Bridge) refreshPane(paneKey string, force bool) {

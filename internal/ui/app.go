@@ -33,7 +33,7 @@ import (
 	"gravitybox-mygo/resources"
 )
 
-const appVersion = "1.2.8"
+const appVersion = "1.2.9"
 
 var (
 	svgOverview    = mygoui.MustParseSVG([]byte(`<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg>`))
@@ -52,6 +52,7 @@ var (
 	svgStorage     = mygoui.MustParseSVG([]byte(`<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>`))
 	svgChevronUp   = mygoui.MustParseSVG([]byte(`<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m18 15-6-6-6 6"/></svg>`))
 	svgChevronDown = mygoui.MustParseSVG([]byte(`<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>`))
+	svgPalette     = mygoui.MustParseSVG([]byte(`<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="13.5" cy="6.5" r=".5" fill="currentColor"/><circle cx="17.5" cy="10.5" r=".5" fill="currentColor"/><circle cx="8.5" cy="7.5" r=".5" fill="currentColor"/><circle cx="6.5" cy="12.5" r=".5" fill="currentColor"/><path d="M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10c.926 0 1.648-.746 1.648-1.688 0-.437-.18-.835-.437-1.125-.29-.289-.438-.652-.438-1.125a1.64 1.64 0 0 1 1.668-1.668h1.996c3.051 0 5.555-2.503 5.555-5.554C21.965 6.012 17.461 2 12 2z"/></svg>`))
 	svgGemini      = mygoui.MustParseSVG([]byte(`<svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 2c.4 4.9 4.1 8.6 9 9-4.9.4-8.6 4.1-9 9-.4-4.9-4.1-8.6-9-9 4.9-.4 8.6-4.1 9-9Z"/></svg>`))
 	svgClaude      = mygoui.MustParseSVG([]byte(`<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><line x1="12" y1="3" x2="12" y2="21"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="5.6" y1="5.6" x2="18.4" y2="18.4"/><line x1="18.4" y1="5.6" x2="5.6" y2="18.4"/></svg>`))
 	svgOpenAI      = mygoui.MustParseSVG([]byte(`<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="8"/><circle cx="12" cy="12" r="3"/></svg>`))
@@ -87,18 +88,26 @@ type App struct {
 	cfg              config.Config
 	autoSwitch       accounts.AutoSwitchConfig
 	activeNav        string
-	popoverTab       int    // 0: 用量, 1: 配额, 2: 账号
-	popoverPeriod    int    // 0: 今日, 1: 近 7 天, 2: 近 30 天, 3: 全部
-	selectedLang     string
-	selectedInterval string
-	usagePeriod      int    // 0: 今日, 1: 近 7 天, 2: 近 30 天, 3: 全部
-	usageAcctFilter  string // "全部账号" or email
+	popoverTab          int    // 0: 用量, 1: 配额, 2: 账号
+	popoverPeriod       int    // 0: 今日, 1: 近 7 天, 2: 近 30 天, 3: 全部
+	selectedLang        string
+	selectedInterval    string
+	selectedAppTheme    string
+	selectedCodexPreset string
+	selectedAccent      string
+	selectedChatFont    string
+	selectedHudLayout   string
+	selectedCacheMode   string
+	selectedCtxLimit    string
+	usagePeriod         int    // 0: 今日, 1: 近 7 天, 2: 近 30 天, 3: 全部
+	usageAcctFilter     string // "全部账号" or email
 
 	// Collapse state on Accounts page
 	allCollapsed      bool
 	collapsedAccounts map[string]bool
 
 	controller *cdp.Controller
+	hudBridge  *hud.Bridge
 	refreshing atomic.Bool
 	asarBusy   atomic.Bool
 	acctBusy   atomic.Bool
@@ -155,7 +164,16 @@ func Run() error {
 	}
 	hudEngine := hud.NewMetricsEngine(config.StateDir())
 	hudBridge := hud.NewBridge(hudEngine)
+	hudBridge.UpdateTelemetryConfig(cfg.TelemetryLayout, cfg.TelemetryCacheMode, cfg.ManualContextLimit)
 	ctrl.SetHudHandler(hudBridge)
+	ctrl.UpdateCodexSettings(cdp.CodexSettings{
+		ThemeEnabled:       cfg.CodexThemeEnabled,
+		ThemePreset:        cfg.CodexThemePreset,
+		TelemetryLayout:    cfg.TelemetryLayout,
+		TelemetryCacheMode: cfg.TelemetryCacheMode,
+		ManualContextLimit: cfg.ManualContextLimit,
+		ThemeVars:          config.EffectiveCodexThemeVars(cfg),
+	})
 	asCfg := accounts.LoadAutoSwitch()
 	app := &App{
 		cfg:                  cfg,
@@ -164,9 +182,17 @@ func Run() error {
 		popoverTab:           1, // 配额 / 总览直观展示
 		selectedLang:         langLabel(cfg.AppLanguage),
 		selectedInterval:     intervalLabel(cfg.QuotaRefreshInterval),
+		selectedAppTheme:     appThemeLabel(cfg.AppTheme),
+		selectedCodexPreset:  codexPresetLabel(cfg.CodexThemePreset),
+		selectedAccent:       accentLabel(cfg.AccentColor),
+		selectedChatFont:     chatFontLabel(cfg.ChatFontSize),
+		selectedHudLayout:    hudLayoutLabel(cfg.TelemetryLayout),
+		selectedCacheMode:    cacheModeLabel(cfg.TelemetryCacheMode),
+		selectedCtxLimit:     ctxLimitLabel(cfg.ManualContextLimit),
 		usageAcctFilter:      "全部账号",
 		collapsedAccounts:    make(map[string]bool),
 		controller:           ctrl,
+		hudBridge:            hudBridge,
 		modelBmps:            make(map[string]*mygoui.Bitmap),
 		autoSwitchThreshText: fmt.Sprintf("%.0f", asCfg.ThresholdPct),
 		autoSwitchTargetText: fmt.Sprintf("%.0f", asCfg.TargetPct),
@@ -337,6 +363,17 @@ func (a *App) refreshAsync() {
 			a.cfg.HudEnabled,
 			asarSt.IsPatched,
 		)
+		a.controller.UpdateCodexSettings(cdp.CodexSettings{
+			ThemeEnabled:       a.cfg.CodexThemeEnabled,
+			ThemePreset:        a.cfg.CodexThemePreset,
+			TelemetryLayout:    a.cfg.TelemetryLayout,
+			TelemetryCacheMode: a.cfg.TelemetryCacheMode,
+			ManualContextLimit: a.cfg.ManualContextLimit,
+			ThemeVars:          config.EffectiveCodexThemeVars(a.cfg),
+		})
+		if a.hudBridge != nil {
+			a.hudBridge.UpdateTelemetryConfig(a.cfg.TelemetryLayout, a.cfg.TelemetryCacheMode, a.cfg.ManualContextLimit)
+		}
 		cdpCtx, cdpCancel := context.WithTimeout(context.Background(), 4*time.Second)
 		cdpSt := a.controller.SyncOnce(cdpCtx, running)
 		cdpCancel()
@@ -686,14 +723,45 @@ func (a *App) saveConfig() {
 	a.refreshAsync()
 }
 
+func (a *App) resolveAppTheme(c *mygoui.Context) *mygoui.Theme {
+	isDark := c.Theme().Dark
+	switch a.cfg.AppTheme {
+	case "light":
+		isDark = false
+	case "dark":
+		isDark = true
+	}
+	base := mygoui.LightTheme()
+	if isDark {
+		base = mygoui.DarkTheme()
+	}
+	var accent mygoui.Color
+	switch a.cfg.AccentColor {
+	case "emerald":
+		accent = mygoui.RGB(5, 150, 105)
+	case "indigo":
+		accent = mygoui.RGB(99, 102, 241)
+	case "amber":
+		accent = mygoui.RGB(217, 119, 6)
+	default:
+		if isDark {
+			accent = mygoui.RGB(44, 103, 197)
+		} else {
+			accent = mygoui.RGB(43, 127, 255)
+		}
+	}
+	return base.WithAccent(accent)
+}
+
 func (a *App) pageCanvasColor(t *mygoui.Theme) mygoui.Color {
 	if t.Dark {
-		return mygoui.RGB(20, 22, 27)
+		return mygoui.RGB(24, 24, 24)
 	}
-	return mygoui.RGB(245, 246, 248)
+	return mygoui.RGB(249, 249, 249)
 }
 
 func (a *App) popoverView(c *mygoui.Context) {
+	c.SetTheme(a.resolveAppTheme(c))
 	if c.Shortcut(0, mygoui.KeyEscape) {
 		a.popoverWin.Hide()
 	}
@@ -701,7 +769,7 @@ func (a *App) popoverView(c *mygoui.Context) {
 	bg := a.pageCanvasColor(t)
 	cardBg := mygoui.RGB(255, 255, 255)
 	if t.Dark {
-		cardBg = mygoui.RGB(30, 34, 43)
+		cardBg = mygoui.RGB(35, 35, 35)
 	}
 
 	mygoui.Column(c).Fill().Padding(14).Gap(10).Background(bg).Border(1, t.Border).Children(func() {
@@ -776,6 +844,12 @@ func (a *App) popoverView(c *mygoui.Context) {
 								a.saveConfig()
 							}
 						})
+						mygoui.Row(c).Gap(10).AlignItems(mygoui.Center).Children(func() {
+							mygoui.Text(c, "Codex 昼夜主题").FontSize(12).Grow(1)
+							if mygoui.Switch(c, &a.cfg.CodexThemeEnabled).Label("Codex 昼夜主题").Changed() {
+								a.saveConfig()
+							}
+						})
 					})
 				case 2:
 					if len(a.savedAccounts) == 0 {
@@ -829,6 +903,7 @@ func (a *App) miniTile(c *mygoui.Context, cardBg mygoui.Color, label, value stri
 }
 
 func (a *App) mainView(c *mygoui.Context) {
+	c.SetTheme(a.resolveAppTheme(c))
 	t := c.Theme()
 	bg := a.pageCanvasColor(t)
 	mygoui.Row(c).Fill().AlignItems(mygoui.Stretch).Background(bg).Children(func() {
@@ -857,15 +932,14 @@ func (a *App) mainView(c *mygoui.Context) {
 
 func (a *App) sidebarView(c *mygoui.Context) {
 	t := c.Theme()
-	sidebarBg := mygoui.RGB(236, 238, 242)
+	sidebarBg := mygoui.RGB(242, 243, 245)
 	if t.Dark {
-		sidebarBg = mygoui.RGB(26, 29, 36)
+		sidebarBg = mygoui.RGB(35, 35, 35)
 	}
-	activeBg := mygoui.RGBA(37, 99, 235, 0.12)
-	activeFg := mygoui.RGB(37, 99, 235)
+	activeFg := t.Accent
+	activeBg := mygoui.RGBA(activeFg.R, activeFg.G, activeFg.B, 0.12)
 	if t.Dark {
-		activeBg = mygoui.RGBA(59, 130, 246, 0.18)
-		activeFg = mygoui.RGB(96, 165, 250)
+		activeBg = mygoui.RGBA(activeFg.R, activeFg.G, activeFg.B, 0.18)
 	}
 	chipBg := mygoui.RGBA(15, 23, 42, 0.05)
 	if t.Dark {
@@ -986,6 +1060,160 @@ func intervalFromLabel(s string) int {
 		return 900
 	case "每 30 分钟":
 		return 1800
+	default:
+		return 0
+	}
+}
+
+func appThemeLabel(code string) string {
+	switch code {
+	case "light":
+		return "浅色"
+	case "dark":
+		return "深色"
+	default:
+		return "跟随系统"
+	}
+}
+
+func appThemeFromLabel(s string) string {
+	switch s {
+	case "浅色":
+		return "light"
+	case "深色":
+		return "dark"
+	default:
+		return "system"
+	}
+}
+
+func codexPresetLabel(code string) string {
+	switch code {
+	case "codex-pure-white":
+		return "Codex 纯白浅色"
+	case "codex-dark":
+		return "Codex 炭灰深色"
+	default:
+		return "自动跟随 IDE"
+	}
+}
+
+func codexPresetFromLabel(s string) string {
+	switch s {
+	case "Codex 纯白浅色":
+		return "codex-pure-white"
+	case "Codex 炭灰深色":
+		return "codex-dark"
+	default:
+		return "auto"
+	}
+}
+
+func accentLabel(code string) string {
+	switch code {
+	case "emerald":
+		return "翡翠绿"
+	case "indigo":
+		return "靛青紫"
+	case "amber":
+		return "琥珀金"
+	default:
+		return "经典蓝"
+	}
+}
+
+func accentFromLabel(s string) string {
+	switch s {
+	case "翡翠绿":
+		return "emerald"
+	case "靛青紫":
+		return "indigo"
+	case "琥珀金":
+		return "amber"
+	default:
+		return "blue"
+	}
+}
+
+func chatFontLabel(px int) string {
+	switch px {
+	case 14:
+		return "14px"
+	case 15:
+		return "15px"
+	case 16:
+		return "16px"
+	default:
+		return "默认"
+	}
+}
+
+func chatFontFromLabel(s string) int {
+	switch s {
+	case "14px":
+		return 14
+	case "15px":
+		return 15
+	case "16px":
+		return 16
+	default:
+		return 0
+	}
+}
+
+func hudLayoutLabel(code string) string {
+	if code == "detailed" {
+		return "详细 (含 TTFT/Out)"
+	}
+	return "紧凑 (默认)"
+}
+
+func hudLayoutFromLabel(s string) string {
+	if s == "详细 (含 TTFT/Out)" {
+		return "detailed"
+	}
+	return "compact"
+}
+
+func cacheModeLabel(code string) string {
+	if code == "step" {
+		return "当前步命中率"
+	}
+	return "会话累计命中率"
+}
+
+func cacheModeFromLabel(s string) string {
+	if s == "当前步命中率" {
+		return "step"
+	}
+	return "session"
+}
+
+func ctxLimitLabel(v int) string {
+	switch v {
+	case 256000:
+		return "256k"
+	case 512000:
+		return "512k"
+	case 1000000:
+		return "1M"
+	case 2000000:
+		return "2M"
+	default:
+		return "自动识别"
+	}
+}
+
+func ctxLimitFromLabel(s string) int {
+	switch s {
+	case "256k":
+		return 256000
+	case "512k":
+		return 512000
+	case "1M":
+		return 1000000
+	case "2M":
+		return 2000000
 	default:
 		return 0
 	}

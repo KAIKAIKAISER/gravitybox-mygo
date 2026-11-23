@@ -105,3 +105,40 @@ func TestDialWSOmitsOriginHeader(t *testing.T) {
 		t.Fatalf("expected empty Origin header to satisfy Chromium DevTools check, got %q", got)
 	}
 }
+
+func TestBuildCodexBundleAndSwarmTarget(t *testing.T) {
+	if !isAllowedTarget(Target{
+		Type:                 "iframe",
+		URL:                  "plugin://swarm--local/view",
+		WebSocketDebuggerURL: "ws://127.0.0.1:9222/devtools/page/swarm-1",
+	}) {
+		t.Fatal("expected swarm plugin iframe to be permitted")
+	}
+
+	ctrl, err := NewController(9222, "zh-Hans", true, true)
+	if err != nil {
+		t.Fatalf("NewController failed: %v", err)
+	}
+	defer ctrl.Stop()
+
+	ctrl.UpdateCodexSettings(CodexSettings{
+		ThemeEnabled:       true,
+		ThemePreset:        "codex-dark",
+		TelemetryLayout:    "detailed",
+		TelemetryCacheMode: "step",
+		ThemeVars:          map[string]string{"--primary": "#059669"},
+	})
+
+	ctrl.mu.Lock()
+	ver := ctrl.codexPatchVersion
+	cfg := ctrl.codexCfg
+	ctrl.mu.Unlock()
+
+	expr, err := ctrl.buildCodexMainBootExpression(false, true, true, cfg, ver)
+	if err != nil {
+		t.Fatalf("buildCodexMainBootExpression failed: %v", err)
+	}
+	if !strings.Contains(expr, `"themeForceMode":"dark"`) || !strings.Contains(expr, `"telemetryLayout":"detailed"`) || !strings.Contains(expr, `computeStatusSnapshot`) {
+		t.Fatalf("unexpected codex main boot expression")
+	}
+}
