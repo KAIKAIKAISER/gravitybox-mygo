@@ -67,10 +67,11 @@ type Summary struct {
 	TodayModels   []ModelSummary
 
 	// Filtered Usage page stats (by period + accountFilter)
-	PeriodTokens    int64
-	PeriodInput     int64
-	PeriodCached    int64
-	PeriodOutput    int64
+	PeriodTokens     int64
+	PeriodInput      int64
+	PeriodCached     int64
+	PeriodCacheWrite int64
+	PeriodOutput     int64
 	PeriodUSD       float64
 	PeriodRequests  int64
 	AvgTokensPerReq int64
@@ -120,12 +121,22 @@ var (
 	acctMapSig       string
 	obsTimeline      []observationEntry
 	obsSig           string
+	sessionObs       []observationEntry
 )
 
-// SetActiveAccountEmail updates the fallback active email attributed to newly scanned conversation events.
+// SetActiveAccountEmail updates the fallback active email attributed to newly scanned conversation events
+// and records in-session account switches so multi-account attribution stays accurate after switching.
 func SetActiveAccountEmail(email string) {
+	email = strings.TrimSpace(email)
+	nowUnix := time.Now().Unix()
 	cacheMu.Lock()
-	activeEmail = strings.TrimSpace(email)
+	activeEmail = email
+	if email != "" {
+		if n := len(sessionObs); n == 0 || !strings.EqualFold(sessionObs[n-1].Email, email) {
+			id := acctIDByEmail[strings.ToLower(email)]
+			sessionObs = append(sessionObs, observationEntry{At: nowUnix, ID: id, Email: email})
+		}
+	}
 	cacheMu.Unlock()
 }
 
@@ -148,14 +159,58 @@ func loadMergedEvents(ctx context.Context) []cachedUsageEvent {
 	cacheMu.Lock()
 	fallbackEmail := activeEmail
 	obs := obsTimeline
+	sessObs := append([]observationEntry(nil), sessionObs...)
+	idByEmail := acctIDByEmail
 	cacheMu.Unlock()
 
+	obsLastAt := int64(0)
+	if len(obs) > 0 {
+		obsLastAt = obs[len(obs)-1].At
+	}
+
+	resolveAccount := func(ts int64, allowFallback bool) (string, string) {
+		if em, aid := lookupObservation(sessObs, ts); em != "" {
+			if aid == "" {
+				aid = idByEmail[strings.ToLower(em)]
+			}
+			return em, aid
+		}
+		if len(obs) > 0 && ts > obsLastAt && len(sessObs) > 0 && sessObs[0].Email != "" {
+			aid := sessObs[0].ID
+			if aid == "" {
+				aid = idByEmail[strings.ToLower(sessObs[0].Email)]
+			}
+			return sessObs[0].Email, aid
+		}
+		if em, aid := lookupObservation(obs, ts); em != "" {
+			if aid == "" {
+				aid = idByEmail[strings.ToLower(em)]
+			}
+			return em, aid
+		}
+		if allowFallback && fallbackEmail != "" {
+			return fallbackEmail, idByEmail[strings.ToLower(fallbackEmail)]
+		}
+		return "", ""
+	}
+
 	merged := make([]cachedUsageEvent, 0, len(lEvents)+len(cEvents))
-	merged = append(merged, lEvents...)
+	for _, ev := range lEvents {
+		if ev.AccountEmail == "" {
+			if em, aid := resolveAccount(ev.Timestamp, false); em != "" {
+				ev.AccountEmail = em
+				if ev.AccountID == "" {
+					ev.AccountID = aid
+				}
+			}
+		}
+		merged = append(merged, ev)
+	}
 
 	for _, ev := range cEvents {
-		if ev.HasGenIdx && ev.DBFile != "" {
-			if lDBKeys[ev.DBFile+":"+strconv.Itoa(ev.GenIdx)] {
+		dbBase := cleanDBBase(ev.DBFile)
+		if ev.HasGenIdx && dbBase != "" {
+			if lDBKeys[dbBase+":"+strconv.Itoa(ev.GenIdx)] {
 				continue
 			}
 		}
@@ -163,12 +218,7 @@ func loadMergedEvents(ctx context.Context) []cachedUsageEvent {
 			continue
 		}
 		if ev.AccountEmail == "" {
-			if em, aid := lookupObservation(obs, ev.Timestamp); em != "" {
-				ev.AccountEmail = em
-				ev.AccountID = aid
-			} else if fallbackEmail != "" {
-				ev.AccountEmail = fallbackEmail
-			}
+			ev.AccountEmail, ev.AccountID = resolveAccount(ev.Timestamp, true)
 		}
 		if ev.EstimatedUSD <= 0 {
 			ev.EstimatedUSD = estimateEventCost(ev.Model, float64(ev.Timestamp), ev.InputTokens, ev.CachedTokens, ev.CacheWriteTokens, ev.OutputTokens)
@@ -180,6 +230,20 @@ func loadMergedEvents(ctx context.Context) []cachedUsageEvent {
 		return merged[i].Timestamp > merged[j].Timestamp
 	})
 	return merged
+}
+
+func cleanDBBase(s string) string {
+	s = strings.TrimSpace(strings.ReplaceAll(s, "\\", "/"))
+	if s == "" {
+		return ""
+	}
+	if idx := strings.LastIndexByte(s, '/'); idx >= 0 {
+		s = s[idx+1:]
+	}
+	if s == "." || s == ".." {
+		return ""
+	}
+	return s
 }
 
 func tripletKey(ts int64, model string, total int64) string {
@@ -215,9 +279,9 @@ func loadLedgerCached(ctx context.Context) ([]cachedUsageEvent, map[string]bool,
 		LEFT JOIN rate_locks l ON l.event_key = e.event_key
 		LEFT JOIN event_aliases a ON a.legacy_key = e.event_key
 		WHERE a.legacy_key IS NULL
-		ORDER BY e.timestamp DESC`)
+		ORDER BY e.timestamp DESC, e.rowid DESC`)
 	if err != nil {
-		rows, err = db.Query(ctx, `SELECT timestamp, account_id, model, payload, -1 FROM events ORDER BY timestamp DESC`)
+		rows, err = db.Query(ctx, `SELECT timestamp, account_id, model, payload, -1 FROM events ORDER BY timestamp DESC, rowid DESC`)
 		if err != nil {
 			return nil, map[string]bool{}, map[string]bool{}
 		}
@@ -281,6 +345,15 @@ func loadLedgerCached(ctx context.Context) ([]cachedUsageEvent, map[string]bool,
 			evUSD = estimateEventCost(model, float64(ts), ev.InputTokens, ev.CachedTokens, ev.CacheWriteTokens, ev.OutputTokens)
 		}
 
+		dbBase := cleanDBBase(ev.DBFile)
+		var dbGenKey string
+		if ev.GenerationIndex != nil && dbBase != "" {
+			dbGenKey = dbBase + ":" + strconv.Itoa(*ev.GenerationIndex)
+			if dbKeys[dbGenKey] {
+				continue
+			}
+		}
+
 		item := cachedUsageEvent{
 			Timestamp:        ts,
 			AccountID:        acctID,
@@ -292,13 +365,13 @@ func loadLedgerCached(ctx context.Context) ([]cachedUsageEvent, map[string]bool,
 			OutputTokens:     ev.OutputTokens,
 			TotalTokens:      ev.TotalTokens,
 			EstimatedUSD:     evUSD,
-			DBFile:           ev.DBFile,
+			DBFile:           dbBase,
 		}
 		if ev.GenerationIndex != nil {
 			item.GenIdx = *ev.GenerationIndex
 			item.HasGenIdx = true
-			if ev.DBFile != "" {
-				dbKeys[ev.DBFile+":"+strconv.Itoa(*ev.GenerationIndex)] = true
+			if dbGenKey != "" {
+				dbKeys[dbGenKey] = true
 			}
 		}
 		triplets[tripletKey(ts, model, ev.TotalTokens)] = true
@@ -372,17 +445,29 @@ func scanSingleConversationDB(ctx context.Context, dbPath, dbFile string) []cach
 	}
 
 	var stepTimes map[int]int64
-	loadStepTimes := func() map[int]int64 {
-		if stepTimes != nil {
+	allStepsLoaded := false
+	loadStepTimes := func(includeAllSteps bool) map[int]int64 {
+		if stepTimes != nil && (!includeAllSteps || allStepsLoaded) {
 			return stepTimes
 		}
-		stepTimes = make(map[int]int64)
-		if srows, err := db.Query(qctx, "SELECT idx, step_type, status, metadata FROM steps WHERE step_type = 15 AND metadata IS NOT NULL ORDER BY idx ASC"); err == nil {
+		if stepTimes == nil {
+			stepTimes = make(map[int]int64)
+		}
+		query := "SELECT idx, step_type, status, metadata FROM steps WHERE step_type = 15 AND metadata IS NOT NULL ORDER BY idx ASC"
+		if includeAllSteps {
+			query = "SELECT idx, step_type, status, metadata FROM steps WHERE metadata IS NOT NULL ORDER BY idx ASC"
+			allStepsLoaded = true
+		}
+		if srows, err := db.Query(qctx, query); err == nil {
 			for _, sr := range srows.Values {
 				if len(sr) < 4 {
 					continue
 				}
-				ps := hud.ParseStepMetadataBlob(toInt(sr[0]), toInt(sr[1]), toInt(sr[2]), toBytesVal(sr[3]), nil, nil, nil)
+				idxVal := toInt(sr[0])
+				if _, exists := stepTimes[idxVal]; exists {
+					continue
+				}
+				ps := hud.ParseStepMetadataBlob(idxVal, toInt(sr[1]), toInt(sr[2]), toBytesVal(sr[3]), nil, nil, nil)
 				if ps.CreatedAtSeconds != nil && *ps.CreatedAtSeconds >= 946684800 {
 					stepTimes[ps.Idx] = int64(*ps.CreatedAtSeconds)
 				} else if ps.StartTimeSeconds != nil && *ps.StartTimeSeconds >= 946684800 {
@@ -418,12 +503,21 @@ func scanSingleConversationDB(ctx context.Context, dbPath, dbFile string) []cach
 		}
 
 		ts := int64(g.StartedAtSeconds)
-		if ts < 946684800 {
-			stMap := loadStepTimes()
+		if ts < 946684800 && len(g.StepIndices) > 0 {
+			stMap := loadStepTimes(false)
 			for _, sIdx := range g.StepIndices {
 				if v, ok := stMap[sIdx]; ok && v >= 946684800 {
 					ts = v
 					break
+				}
+			}
+			if ts < 946684800 {
+				stMap = loadStepTimes(true)
+				for _, sIdx := range g.StepIndices {
+					if v, ok := stMap[sIdx]; ok && v >= 946684800 {
+						ts = v
+						break
+					}
 				}
 			}
 		}
@@ -544,6 +638,7 @@ func aggregateSummary(events []cachedUsageEvent, period int, accountFilter strin
 		out.PeriodTokens += ev.TotalTokens
 		out.PeriodInput += ev.InputTokens
 		out.PeriodCached += ev.CachedTokens
+		out.PeriodCacheWrite += ev.CacheWriteTokens
 		out.PeriodOutput += ev.OutputTokens
 		out.PeriodUSD += ev.EstimatedUSD
 		out.PeriodRequests++
@@ -579,7 +674,7 @@ func aggregateSummary(events []cachedUsageEvent, period int, accountFilter strin
 	if out.PeriodRequests > 0 {
 		out.AvgTokensPerReq = out.PeriodTokens / out.PeriodRequests
 	}
-	denom := out.PeriodInput + out.PeriodCached
+	denom := out.PeriodInput + out.PeriodCacheWrite + out.PeriodCached
 	if denom > 0 {
 		out.CacheHitRate = float64(out.PeriodCached) * 100 / float64(denom)
 	}

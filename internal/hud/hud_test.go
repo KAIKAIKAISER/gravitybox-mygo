@@ -41,6 +41,19 @@ func TestResolveModelCapacityAndPricing(t *testing.T) {
 	if _, _, _, _, ok := LookupPrice("gemini-4-carbon", float64(time.Date(2026, 11, 15, 0, 0, 0, 0, time.UTC).Unix())); !ok {
 		t.Fatal("expected pricing entry for gemini-4-carbon")
 	}
+
+	// Verify longest prefix wins deterministically over shorter prefix ("gemini-2.5-flash").
+	ts := float64(time.Date(2026, 11, 24, 0, 0, 0, 0, time.UTC).Unix())
+	inLite, outLite, crLite, cwLite, okLite := LookupPrice("gemini-2.5-flash-lite", ts)
+	if !okLite {
+		t.Fatal("expected pricing for gemini-2.5-flash-lite")
+	}
+	for i := 0; i < 20; i++ {
+		inGot, outGot, crGot, cwGot, okGot := LookupPrice("gemini-2.5-flash-lite-preview", ts)
+		if !okGot || inGot != inLite || outGot != outLite || crGot != crLite || cwGot != cwLite {
+			t.Fatalf("iteration %d: expected longest prefix rates (%v,%v,%v,%v), got (%v,%v,%v,%v)", i, inLite, outLite, crLite, cwLite, inGot, outGot, crGot, cwGot)
+		}
+	}
 }
 
 func TestProtobufStepAndGenDecoding(t *testing.T) {

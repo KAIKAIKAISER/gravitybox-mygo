@@ -440,11 +440,12 @@ func LookupPrice(rawModel string, stepTs float64) (inputRate, outputRate, cacheR
 	}
 	rule, ok := catPrices[slug]
 	if !ok {
+		bestLen := 0
 		for k, v := range catPrices {
-			if strings.HasPrefix(slug, k) {
+			if strings.HasPrefix(slug, k) && len(k) > bestLen {
 				rule = v
+				bestLen = len(k)
 				ok = true
-				break
 			}
 		}
 	}

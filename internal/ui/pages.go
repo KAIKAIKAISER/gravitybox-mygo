@@ -379,6 +379,7 @@ func (a *App) usagePage(c *mygoui.Context) {
 				a.refreshAsync()
 			}
 		})
+		mygoui.Text(c, "仅统计本机 Antigravity 对话库与历史账本记录；账号配额由云端共享，其他电脑上的用量不会同步到本机。").FontSize(11).TextColor(t.TextMuted)
 	})
 
 	periodLabels := []string{"今日", "近 7 天", "近 30 天", "全部"}
@@ -391,10 +392,18 @@ func (a *App) usagePage(c *mygoui.Context) {
 			mygoui.Badge(c, periodLabel)
 		})
 		mygoui.Text(c, usage.FormatTokens(a.usageSummary.PeriodTokens)).FontSize(30).Bold()
-		mygoui.Text(c, fmt.Sprintf("输入 %s · 缓存读取 %s · 输出 %s",
+		tokenDetail := fmt.Sprintf("输入 %s · 缓存读取 %s · 输出 %s",
 			usage.FormatTokens(a.usageSummary.PeriodInput),
 			usage.FormatTokens(a.usageSummary.PeriodCached),
-			usage.FormatTokens(a.usageSummary.PeriodOutput))).FontSize(12).TextColor(t.TextMuted)
+			usage.FormatTokens(a.usageSummary.PeriodOutput))
+		if a.usageSummary.PeriodCacheWrite > 0 {
+			tokenDetail = fmt.Sprintf("输入 %s · 缓存写入 %s · 缓存读取 %s · 输出 %s",
+				usage.FormatTokens(a.usageSummary.PeriodInput),
+				usage.FormatTokens(a.usageSummary.PeriodCacheWrite),
+				usage.FormatTokens(a.usageSummary.PeriodCached),
+				usage.FormatTokens(a.usageSummary.PeriodOutput))
+		}
+		mygoui.Text(c, tokenDetail).FontSize(12).TextColor(t.TextMuted)
 		a.barChart(c, a.usageSummary.Buckets, 175)
 	})
 
