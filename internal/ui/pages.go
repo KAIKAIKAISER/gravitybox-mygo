@@ -239,14 +239,14 @@ func (a *App) accountsPage(c *mygoui.Context) {
 			}
 			updatedAt = a.liveQuota.ProbedAt.Unix()
 		}
-		a.renderAccountCard(c, acc.Email, displayName, tier, isActive, true, windows, updatedAt)
+		a.renderAccountCard(c, acc.Email, displayName, tier, isActive, true, acc.HasCredentialSnapshot, windows, updatedAt)
 	}
 	if a.liveQuota.Connected && !seenActive {
 		displayName := a.liveQuota.Name
 		if displayName == "" {
 			displayName = a.liveQuota.Email
 		}
-		a.renderAccountCard(c, a.liveQuota.Email, displayName, a.liveQuota.Tier, true, false, a.liveQuota.Windows, a.liveQuota.ProbedAt.Unix())
+		a.renderAccountCard(c, a.liveQuota.Email, displayName, a.liveQuota.Tier, true, false, false, a.liveQuota.Windows, a.liveQuota.ProbedAt.Unix())
 	}
 	if !a.liveQuota.Connected && len(a.savedAccounts) == 0 {
 		a.card(c, "", func() {
@@ -255,7 +255,7 @@ func (a *App) accountsPage(c *mygoui.Context) {
 	}
 }
 
-func (a *App) renderAccountCard(c *mygoui.Context, email, displayName, tier string, isActive, isSaved bool, windows []quota.QuotaWindow, updatedAt int64) {
+func (a *App) renderAccountCard(c *mygoui.Context, email, displayName, tier string, isActive, isSaved, hasCred bool, windows []quota.QuotaWindow, updatedAt int64) {
 	t := c.Theme()
 	collapsed := a.collapsedAccounts[email]
 
@@ -305,13 +305,19 @@ func (a *App) renderAccountCard(c *mygoui.Context, email, displayName, tier stri
 				a.collapsedAccounts[email] = !collapsed
 			}
 			})
-			if displayName != email || isActive {
+			if displayName != email || isActive || isSaved {
 				mygoui.Row(c).Gap(8).AlignItems(mygoui.Center).Children(func() {
 					if displayName != email {
 						mygoui.Text(c, email).FontSize(12).TextColor(t.TextMuted)
 					}
-					if isActive {
-						mygoui.Badge(c, "切换前请刷新登录凭据; 当前运行账号可重新保存当前账号").
+					if hasCred {
+						mygoui.Badge(c, "✓ 已保存登录凭据").
+							Background(mygoui.RGBA(22, 163, 74, 0.14)).TextColor(mygoui.RGB(21, 128, 61))
+					} else if isActive {
+						mygoui.Badge(c, "尚未保存登录凭据快照，点击右侧或「添加账号」保存").
+							Background(mygoui.RGBA(217, 119, 6, 0.14)).TextColor(mygoui.RGB(180, 83, 9))
+					} else if isSaved {
+						mygoui.Badge(c, "未保存登录凭据，需在该账号登录时保存快照").
 							Background(mygoui.RGBA(217, 119, 6, 0.14)).TextColor(mygoui.RGB(180, 83, 9))
 					}
 				})

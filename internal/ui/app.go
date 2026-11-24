@@ -33,7 +33,7 @@ import (
 	"gravitybox-mygo/resources"
 )
 
-const appVersion = "1.2.11"
+const appVersion = "1.2.12"
 
 var (
 	svgOverview    = mygoui.MustParseSVG([]byte(`<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg>`))
@@ -625,11 +625,16 @@ func (a *App) snapshotCurrentAccountAsync() {
 		ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
 		err := accounts.SnapshotCurrentFromVscdb(ctx, email, name, tier, families...)
 		cancel()
+		curID, savedList, _ := accounts.ListSaved()
 		mygo.RunOnMain(func() {
+			if savedList != nil || curID != "" {
+				a.currentAccountID = curID
+				a.savedAccounts = savedList
+			}
 			if err != nil {
 				a.accountNotice = err.Error()
 			} else {
-				a.accountNotice = fmt.Sprintf("已保存当前账号 %s", email)
+				a.accountNotice = fmt.Sprintf("✓ 已保存当前账号 %s（含登录凭据快照）", email)
 			}
 			a.invalidateVisible()
 		})

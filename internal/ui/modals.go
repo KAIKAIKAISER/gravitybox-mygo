@@ -22,8 +22,18 @@ func (a *App) renderModals(c *mygoui.Context) {
 		mygoui.Column(c).Width(420).Gap(12).Children(func() {
 			mygoui.Text(c, "添加账号").FontSize(16).Bold()
 			if a.liveQuota.Connected {
-				mygoui.Text(c, fmt.Sprintf("检测到当前 Antigravity 已登录：%s (%s)。点击下方按钮保存凭据快照，后续可随时一键切换。", a.liveQuota.Email, a.liveQuota.Tier)).
-					FontSize(13).TextColor(t.TextMuted)
+				hasLiveCred := false
+				for _, acc := range a.savedAccounts {
+					if strings.EqualFold(acc.Email, a.liveQuota.Email) && acc.HasCredentialSnapshot {
+						hasLiveCred = true
+						break
+					}
+				}
+				msg := fmt.Sprintf("检测到当前 Antigravity 已登录：%s (%s)。点击下方按钮保存凭据快照，后续可随时一键切换。", a.liveQuota.Email, a.liveQuota.Tier)
+				if hasLiveCred {
+					msg = fmt.Sprintf("当前账号 %s (%s) 已保存过登录凭据快照。点击下方按钮可更新为最新登录状态与配额。", a.liveQuota.Email, a.liveQuota.Tier)
+				}
+				mygoui.Text(c, msg).FontSize(13).TextColor(t.TextMuted)
 			} else {
 				mygoui.Text(c, "请先打开 Antigravity 并登录目标账号，再回到此处点击「保存当前登录账号」建立可切换快照。").
 					FontSize(13).TextColor(t.TextMuted)

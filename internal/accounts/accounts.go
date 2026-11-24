@@ -19,8 +19,21 @@ import (
 )
 
 const (
-	keyOAuthToken = "antigravityUnifiedStateSync.oauthToken"
-	keyUserStatus = "antigravityUnifiedStateSync.userStatus"
+	keyOAuthToken    = "antigravityUnifiedStateSync.oauthToken"
+	keyUserStatus    = "antigravityUnifiedStateSync.userStatus"
+	credServiceLive  = "gemini"
+	credAccountLive  = "antigravity"
+	credServiceAuth2 = "gravitybox.auth2"
+	credServiceVscdb = "gravitybox.vscdb"
+)
+
+var (
+	credReadFn             = win32.CredRead
+	credWriteFn            = win32.CredWrite
+	credDeleteFn           = win32.CredDelete
+	isAntigravityRunningFn = win32.IsAntigravityRunning
+	stopAntigravityFn      = win32.StopAntigravityGracefully
+	launchAntigravityFn    = win32.LaunchAntigravity
 )
 
 type quotaBucketFile struct {
@@ -45,18 +58,19 @@ type quotaBlob struct {
 
 // SavedAccount mirrors GravityBox's persisted account summary & cached quota windows.
 type SavedAccount struct {
-	ID               string              `json:"id"`
-	Email            string              `json:"email"`
-	Name             string              `json:"name,omitempty"`
-	SubscriptionTier string              `json:"subscription_tier,omitempty"`
-	LastUsed         int64               `json:"last_used,omitempty"`
-	UpdatedAt        int64               `json:"updated_at,omitempty"`
-	QuotaLastUpdated int64               `json:"quota_last_updated,omitempty"`
-	Disabled         bool                `json:"disabled,omitempty"`
-	Quota            *quotaBlob          `json:"quota,omitempty"`
-	Windows          []quota.QuotaWindow `json:"-"`
-	MinRemainingPct  float64             `json:"-"`
-	HasQuota         bool                `json:"-"`
+	ID                    string              `json:"id"`
+	Email                 string              `json:"email"`
+	Name                  string              `json:"name,omitempty"`
+	SubscriptionTier      string              `json:"subscription_tier,omitempty"`
+	LastUsed              int64               `json:"last_used,omitempty"`
+	UpdatedAt             int64               `json:"updated_at,omitempty"`
+	QuotaLastUpdated      int64               `json:"quota_last_updated,omitempty"`
+	Disabled              bool                `json:"disabled,omitempty"`
+	Quota                 *quotaBlob          `json:"quota,omitempty"`
+	Windows               []quota.QuotaWindow `json:"-"`
+	MinRemainingPct       float64             `json:"-"`
+	HasQuota              bool                `json:"-"`
+	HasCredentialSnapshot bool                `json:"-"`
 }
 
 // AutoSwitchConfig stores smart-switch preferences in %APPDATA%\GravityBox\auto_switch.json.
@@ -77,6 +91,11 @@ func StateDBPath() string {
 	return filepath.Join(config.AntigravityUserDataDir(), "User", "globalStorage", "state.vscdb")
 }
 
+// AppStoragePath returns %APPDATA%\Antigravity\app_storage.json (used by Antigravity 2.34.0+).
+func AppStoragePath() string {
+	return filepath.Join(config.AntigravityUserDataDir(), "app_storage.json")
+}
+
 // ListSaved loads the GravityBox account index and cached quota files from %APPDATA%\GravityBox\.
 func ListSaved() (currentID string, accounts []SavedAccount, err error) {
 	indexPath := filepath.Join(config.StateDir(), "accounts.json")
@@ -93,6 +112,7 @@ func ListSaved() (currentID string, accounts []SavedAccount, err error) {
 	}
 	for i := range idx.Accounts {
 		enrichAccountFromDisk(&idx.Accounts[i])
+		idx.Accounts[i].HasCredentialSnapshot = hasCredentialSnapshot(&idx.Accounts[i])
 	}
 	sort.Slice(idx.Accounts, func(i, j int) bool {
 		return idx.Accounts[i].LastUsed > idx.Accounts[j].LastUsed
@@ -209,19 +229,173 @@ func applyQuotaBlob(acc *SavedAccount, q *quotaBlob) {
 	}
 }
 
-// SnapshotCurrentFromVscdb saves the currently active Antigravity account profile (and state.vscdb tokens when available).
+type storedOAuthToken struct {
+	AccessToken  string `json:"access_token"`
+	TokenType    string `json:"token_type"`
+	RefreshToken string `json:"refresh_token"`
+	Expiry       string `json:"expiry,omitempty"`
+	ExpiresIn    int64  `json:"expires_in,omitempty"`
+}
+
+type storedTokenRecord struct {
+	Token        *storedOAuthToken `json:"token"`
+	AuthMethod   string            `json:"auth_method,omitempty"`
+	IDTokenEmail string            `json:"id_token_email,omitempty"`
+	WriterID     string            `json:"writer_id,omitempty"`
+}
+
+func hasCredentialSnapshot(acc *SavedAccount) bool {
+	if acc == nil || acc.Email == "" {
+		return false
+	}
+	if raw, ok, err := credReadFn(credServiceAuth2, acc.Email); err == nil && ok && strings.TrimSpace(raw) != "" {
+		return true
+	}
+	if raw, ok, err := credReadFn(credServiceVscdb, acc.Email); err == nil && ok && strings.TrimSpace(raw) != "" {
+		return true
+	}
+	if raw, err := readLegacyTokenAsStoredToken(acc.ID, acc.Email); err == nil && raw != "" {
+		return true
+	}
+	return false
+}
+
+func readLegacyTokenAsStoredToken(id, email string) (string, error) {
+	var candidates []string
+	if id != "" {
+		candidates = append(candidates, filepath.Join(config.StateDir(), "accounts", id+".json"))
+	}
+	if email != "" && email != id {
+		candidates = append(candidates, filepath.Join(config.StateDir(), "accounts", email+".json"))
+	}
+	for _, p := range candidates {
+		raw, err := os.ReadFile(p)
+		if err != nil {
+			continue
+		}
+		var legacy struct {
+			Email string `json:"email"`
+			Token *struct {
+				AccessToken     string `json:"access_token"`
+				RefreshToken    string `json:"refresh_token"`
+				ExpiresIn       int64  `json:"expires_in"`
+				ExpiryTimestamp int64  `json:"expiry_timestamp"`
+				Expiry          string `json:"expiry"`
+				TokenType       string `json:"token_type"`
+				Email           string `json:"email"`
+			} `json:"token"`
+		}
+		if json.Unmarshal(raw, &legacy) != nil || legacy.Token == nil || legacy.Token.RefreshToken == "" {
+			continue
+		}
+		tokEmail := strings.TrimSpace(legacy.Token.Email)
+		if tokEmail == "" {
+			tokEmail = strings.TrimSpace(legacy.Email)
+		}
+		if tokEmail == "" {
+			tokEmail = email
+		}
+		expiry := strings.TrimSpace(legacy.Token.Expiry)
+		if expiry == "" && legacy.Token.ExpiryTimestamp > 0 {
+			expiry = time.Unix(legacy.Token.ExpiryTimestamp, 0).UTC().Format(time.RFC3339)
+		}
+		tt := strings.TrimSpace(legacy.Token.TokenType)
+		if tt == "" {
+			tt = "Bearer"
+		}
+		rec := storedTokenRecord{
+			Token: &storedOAuthToken{
+				AccessToken:  legacy.Token.AccessToken,
+				TokenType:    tt,
+				RefreshToken: legacy.Token.RefreshToken,
+				Expiry:       expiry,
+				ExpiresIn:    legacy.Token.ExpiresIn,
+			},
+			AuthMethod:   "consumer",
+			IDTokenEmail: tokEmail,
+		}
+		b, err := json.Marshal(rec)
+		if err != nil {
+			return "", err
+		}
+		return string(b), nil
+	}
+	return "", errors.New("no legacy token")
+}
+
+func updateAppStorageUsername(email string) {
+	p := AppStoragePath()
+	raw, err := os.ReadFile(p)
+	if err != nil {
+		return
+	}
+	var m map[string]any
+	if json.Unmarshal(raw, &m) != nil || m == nil {
+		return
+	}
+	m["agy.onboarding.lastLoginUsername"] = email
+	out, err := json.Marshal(m)
+	if err != nil {
+		return
+	}
+	tmp := p + ".tmp"
+	if os.WriteFile(tmp, out, 0o600) == nil {
+		_ = os.Rename(tmp, p)
+	}
+}
+
+// SnapshotCurrentFromVscdb saves the currently active Antigravity account profile and login credentials
+// (supporting Antigravity 2.34.0+ Windows Credential Manager gemini:antigravity as well as legacy state.vscdb).
 func SnapshotCurrentFromVscdb(ctx context.Context, email, name, tier string, families ...quota.FamilyQuota) error {
+	email = strings.TrimSpace(email)
 	if email == "" {
 		return errors.New("未检测到当前登录邮箱，无法保存账号快照")
 	}
+
+	_, list, err := ListSaved()
+	if err != nil {
+		return fmt.Errorf("读取已保存账号索引失败，已中止覆盖保存: %w", err)
+	}
+
+	savedCred := false
+	var credErr error
+
+	// 1. Antigravity 2.34.0+: live OAuth token stored in Credential Manager "gemini:antigravity".
+	if raw, found, rErr := credReadFn(credServiceLive, credAccountLive); rErr != nil {
+		credErr = rErr
+	} else if found && strings.TrimSpace(raw) != "" {
+		var rec struct {
+			IDTokenEmail string `json:"id_token_email"`
+			Token        *struct {
+				Email        string `json:"email"`
+				RefreshToken string `json:"refresh_token"`
+				AccessToken  string `json:"access_token"`
+			} `json:"token"`
+		}
+		if json.Unmarshal([]byte(raw), &rec) == nil && rec.Token != nil && (rec.Token.RefreshToken != "" || rec.Token.AccessToken != "") {
+			credEmail := strings.TrimSpace(rec.IDTokenEmail)
+			if credEmail == "" {
+				credEmail = strings.TrimSpace(rec.Token.Email)
+			}
+			if credEmail != "" && !strings.EqualFold(credEmail, email) {
+				return fmt.Errorf("当前凭据属于 %s，与界面检测到的 %s 不一致，请刷新配额后再保存", credEmail, email)
+			} else if wErr := credWriteFn(credServiceAuth2, email, raw); wErr != nil {
+				credErr = wErr
+			} else {
+				savedCred = true
+			}
+		}
+	}
+
+	// 2. Legacy VS Code Antigravity: ItemTable inside state.vscdb.
 	dbPath := StateDBPath()
-	if _, err := os.Stat(dbPath); err == nil {
-		if db, err := sqlite.Open(ctx, dbPath, sqlite.OpenOptions{ReadOnly: true}); err == nil {
+	if _, statErr := os.Stat(dbPath); statErr == nil {
+		if db, oErr := sqlite.Open(ctx, dbPath, sqlite.OpenOptions{ReadOnly: true}); oErr == nil {
 			defer db.Close()
-			if rows, err := db.Query(ctx,
+			if rows, qErr := db.Query(ctx,
 				`SELECT key, value FROM ItemTable WHERE key IN (?, ?)`,
 				keyOAuthToken, keyUserStatus,
-			); err == nil {
+			); qErr == nil {
 				kv := make(map[string]string)
 				for _, r := range rows.Values {
 					if len(r) >= 2 {
@@ -234,13 +408,18 @@ func SnapshotCurrentFromVscdb(ctx context.Context, email, name, tier string, fam
 				}
 				if len(kv) > 0 {
 					secretBytes, _ := json.Marshal(kv)
-					_ = win32.CredWrite("gravitybox.vscdb", email, string(secretBytes))
+					if wErr := credWriteFn(credServiceVscdb, email, string(secretBytes)); wErr != nil {
+						if credErr == nil {
+							credErr = wErr
+						}
+					} else {
+						savedCred = true
+					}
 				}
 			}
 		}
 	}
 
-	_, list, _ := ListSaved()
 	now := time.Now().Unix()
 	qb := buildQuotaBlob(tier, now, families)
 	updated := false
@@ -279,7 +458,16 @@ func SnapshotCurrentFromVscdb(ctx context.Context, email, name, tier string, fam
 	if qb != nil {
 		_ = writeAccountDetailFile(targetID, email, name, qb)
 	}
-	return saveIndex(targetID, list)
+	if err := saveIndex(targetID, list); err != nil {
+		return err
+	}
+	if !savedCred {
+		if credErr != nil {
+			return fmt.Errorf("已保存账号资料，但登录凭据快照保存失败: %w", credErr)
+		}
+		return errors.New("已保存账号资料，但未在系统凭据管理器或 state.vscdb 中找到登录凭据，请先在 Antigravity 内重新登录")
+	}
+	return nil
 }
 
 func buildQuotaBlob(tier string, now int64, families []quota.FamilyQuota) *quotaBlob {
@@ -372,25 +560,78 @@ func DeleteAccount(email string) error {
 	}
 	filtered := make([]SavedAccount, 0, len(list))
 	for _, acc := range list {
-		if acc.Email == email || acc.ID == email {
-			_ = win32.CredDelete("gravitybox.vscdb", acc.Email)
+		if strings.EqualFold(acc.Email, email) || acc.ID == email {
+			_ = credDeleteFn(credServiceAuth2, acc.Email)
+			_ = credDeleteFn(credServiceVscdb, acc.Email)
 			_ = os.Remove(filepath.Join(config.StateDir(), "accounts", acc.ID+".json"))
+			_ = os.Remove(filepath.Join(config.StateDir(), "accounts", acc.Email+".json"))
 			continue
 		}
 		filtered = append(filtered, acc)
 	}
-	if curID == email {
+	if strings.EqualFold(curID, email) {
 		curID = ""
 	}
 	return saveIndex(curID, filtered)
 }
 
-// SwitchAccount performs an atomic Windows account switch via state.vscdb transaction + Antigravity relaunch.
+// SwitchAccount performs an atomic Windows account switch via Antigravity 2.34.0 credential store (or legacy state.vscdb) + relaunch.
 func SwitchAccount(ctx context.Context, email, appDir string, debugPort int) error {
-	if _, err := os.Stat(StateDBPath()); err != nil {
-		return errors.New("当前 Antigravity 版本未使用 state.vscdb 存储登录态，请在 Antigravity 内切换账号后刷新")
+	curID, list, err := ListSaved()
+	if err != nil {
+		return err
 	}
-	secretRaw, found, err := win32.CredRead("gravitybox.vscdb", email)
+	var targetID string
+	for _, acc := range list {
+		if strings.EqualFold(acc.Email, email) || acc.ID == email {
+			targetID = acc.ID
+			break
+		}
+	}
+
+	// Prefer Antigravity 2.34.0 StoredToken snapshot (or legacy Electron account token converted cleanly).
+	auth2Raw, auth2Found, auth2Err := credReadFn(credServiceAuth2, email)
+	if !auth2Found || strings.TrimSpace(auth2Raw) == "" {
+		if legacyRaw, lErr := readLegacyTokenAsStoredToken(targetID, email); lErr == nil && legacyRaw != "" {
+			auth2Raw = legacyRaw
+			auth2Found = true
+			auth2Err = nil
+		}
+	}
+	if auth2Found && strings.TrimSpace(auth2Raw) != "" {
+		if isAntigravityRunningFn() {
+			if err := stopAntigravityFn(ctx); err != nil {
+				return fmt.Errorf("关闭 Antigravity 失败: %w", err)
+			}
+		}
+		if err := credWriteFn(credServiceLive, credAccountLive, auth2Raw); err != nil {
+			return fmt.Errorf("写入 Antigravity 登录凭据失败: %w", err)
+		}
+		updateAppStorageUsername(email)
+
+		newCurrentID := targetID
+		if newCurrentID == "" {
+			newCurrentID = email
+		}
+		for i := range list {
+			if strings.EqualFold(list[i].Email, email) || list[i].ID == targetID {
+				list[i].LastUsed = time.Now().Unix()
+			}
+		}
+		_ = saveIndex(newCurrentID, list)
+		if appDir != "" {
+			return launchAntigravityFn(filepath.Join(appDir, "Antigravity.exe"), debugPort)
+		}
+		return nil
+	}
+	if _, err := os.Stat(StateDBPath()); err != nil {
+		if auth2Err != nil {
+			return auth2Err
+		}
+		return fmt.Errorf("未在系统凭据管理器中找到 %s 的登录凭据快照，请先在该账号登录时点击「保存当前登录账号」", email)
+	}
+
+	secretRaw, found, err := credReadFn(credServiceVscdb, email)
 	if err != nil {
 		return err
 	}
@@ -402,8 +643,8 @@ func SwitchAccount(ctx context.Context, email, appDir string, debugPort int) err
 		return errors.New("凭证快照格式损坏")
 	}
 
-	if win32.IsAntigravityRunning() {
-		if err := win32.StopAntigravityGracefully(ctx); err != nil {
+	if isAntigravityRunningFn() {
+		if err := stopAntigravityFn(ctx); err != nil {
 			return fmt.Errorf("关闭 Antigravity 失败: %w", err)
 		}
 	}
@@ -427,16 +668,22 @@ func SwitchAccount(ctx context.Context, email, appDir string, debugPort int) err
 		return fmt.Errorf("写入 state.vscdb 事务失败: %w", err)
 	}
 
-	_, list, _ := ListSaved()
+	newCurrentID := targetID
+	if newCurrentID == "" {
+		newCurrentID = curID
+	}
+	if newCurrentID == "" {
+		newCurrentID = email
+	}
 	for i := range list {
-		if list[i].Email == email {
+		if strings.EqualFold(list[i].Email, email) {
 			list[i].LastUsed = time.Now().Unix()
 		}
 	}
-	_ = saveIndex(email, list)
+	_ = saveIndex(newCurrentID, list)
 
 	if appDir != "" {
-		return win32.LaunchAntigravity(filepath.Join(appDir, "Antigravity.exe"), debugPort)
+		return launchAntigravityFn(filepath.Join(appDir, "Antigravity.exe"), debugPort)
 	}
 	return nil
 }
