@@ -9,6 +9,8 @@ import (
 	"time"
 
 	"github.com/egoist/mygo/plugins/sqlite"
+
+	"gravitybox-mygo/internal/config"
 )
 
 func resetUsageCachesForTest() {
@@ -83,8 +85,13 @@ func TestLedgerDeduplicatesAndResolvesStepFallbackAndObservations(t *testing.T) 
 
 	tmp := t.TempDir()
 	appData := filepath.Join(tmp, "roaming")
-	stateDir := filepath.Join(appData, "GravityBox")
-	convDir := filepath.Join(tmp, ".gemini", "antigravity", "conversations")
+	t.Setenv("APPDATA", appData)
+	t.Setenv("XDG_CONFIG_HOME", appData)
+	t.Setenv("USERPROFILE", tmp)
+	t.Setenv("HOME", tmp)
+
+	stateDir := config.StateDir()
+	convDir := filepath.Join(config.GeminiDir(), "antigravity", "conversations")
 	if err := os.MkdirAll(stateDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -92,16 +99,15 @@ func TestLedgerDeduplicatesAndResolvesStepFallbackAndObservations(t *testing.T) 
 		t.Fatal(err)
 	}
 
-	t.Setenv("APPDATA", appData)
-	t.Setenv("XDG_CONFIG_HOME", appData)
-	t.Setenv("USERPROFILE", tmp)
-	t.Setenv("HOME", tmp)
-
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
 	// Stale observation from 2 days ago (like legacy Electron ledger stopping writes)
-	now := time.Now().Unix()
+	nowTime := time.Now()
+	now := nowTime.Unix()
+	dayStart := time.Date(nowTime.Year(), nowTime.Month(), nowTime.Day(), 0, 0, 0, 0, nowTime.Location()).Unix()
+	todayTs1 := max(dayStart+30, now-3600)
+	todayTs2 := max(dayStart+60, now-1800)
 	obsJSON := `{"version":1,"entries":[{"at":` +
 		pbNumStr(now-172800) + `,"id":"acct-old","email":"old@example.com"}]}`
 	if err := os.WriteFile(filepath.Join(stateDir, "usage-account-observations.json"), []byte(obsJSON), 0o644); err != nil {
@@ -118,8 +124,8 @@ func TestLedgerDeduplicatesAndResolvesStepFallbackAndObservations(t *testing.T) 
 		`CREATE TABLE events(event_key TEXT PRIMARY KEY, timestamp INTEGER NOT NULL, account_id TEXT, model TEXT NOT NULL, payload TEXT NOT NULL, observed_at REAL NOT NULL DEFAULT 0)`,
 		`CREATE TABLE rate_locks(event_key TEXT PRIMARY KEY, usd REAL NOT NULL)`,
 		`CREATE TABLE event_aliases(legacy_key TEXT PRIMARY KEY, event_key TEXT NOT NULL)`,
-		`INSERT INTO events(event_key, timestamp, account_id, model, payload) VALUES ('old-rev', ` + pbNumStr(now-3600) + `, 'acct-old', 'gemini-4-hydrogen', '{"db_file":"C:\\\\path\\\\conv1.db","generation_index":0,"input_tokens":100,"output_tokens":50,"cached_tokens":200,"total_tokens":350,"account_email":"old@example.com"}')`,
-		`INSERT INTO events(event_key, timestamp, account_id, model, payload) VALUES ('new-rev', ` + pbNumStr(now-1800) + `, 'acct-old', 'gemini-4-hydrogen', '{"db_file":"conv1.db","generation_index":0,"input_tokens":120,"output_tokens":60,"cached_tokens":220,"total_tokens":400,"account_email":"old@example.com"}')`,
+		`INSERT INTO events(event_key, timestamp, account_id, model, payload) VALUES ('old-rev', ` + pbNumStr(todayTs1) + `, 'acct-old', 'gemini-4-hydrogen', '{"db_file":"C:\\\\path\\\\conv1.db","generation_index":0,"input_tokens":100,"output_tokens":50,"cached_tokens":200,"total_tokens":350,"account_email":"old@example.com"}')`,
+		`INSERT INTO events(event_key, timestamp, account_id, model, payload) VALUES ('new-rev', ` + pbNumStr(todayTs2) + `, 'acct-old', 'gemini-4-hydrogen', '{"db_file":"conv1.db","generation_index":0,"input_tokens":120,"output_tokens":60,"cached_tokens":220,"total_tokens":400,"account_email":"old@example.com"}')`,
 	} {
 		if _, err = ldb.Query(ctx, stmt); err != nil {
 			_ = ldb.Close()
