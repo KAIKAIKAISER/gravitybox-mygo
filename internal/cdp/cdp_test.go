@@ -171,12 +171,15 @@ func TestBuildCodexBundleAndSwarmTarget(t *testing.T) {
 		t.Fatalf("expected customFont=true when FontOverrideEnabled=true")
 	}
 
-	// Ensure no un-gated system-ui/Consolas font stacks leak outside customFont rules.
+	// Ensure no un-gated system-ui/Consolas font stacks or custom tracking leak outside customFont rules.
 	for _, block := range strings.Split(ctrl.codexFullCSS, "}") {
-		if strings.Contains(block, "system-ui") || strings.Contains(block, "Segoe UI") || strings.Contains(block, "Consolas") {
-			sel := strings.SplitN(block, "{", 2)[0]
-			if !strings.Contains(sel, `data-ag-custom-font="true"`) {
+		sel := strings.SplitN(block, "{", 2)[0]
+		if !strings.Contains(sel, `data-ag-custom-font="true"`) {
+			if strings.Contains(block, "system-ui") || strings.Contains(block, "Segoe UI") || strings.Contains(block, "Consolas") {
 				t.Fatalf("found un-gated custom font stack in selector: %s", strings.TrimSpace(sel))
+			}
+			if strings.Contains(block, "letter-spacing: -0.0") {
+				t.Fatalf("found un-gated negative letter-spacing in selector: %s", strings.TrimSpace(sel))
 			}
 		}
 	}

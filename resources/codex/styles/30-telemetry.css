@@ -39,8 +39,8 @@
   font-family: var(--font-sans, inherit) !important;
   font-variant-numeric: tabular-nums;
   font-size: 12px !important;
-  font-weight: 500 !important;
-  letter-spacing: -0.01em !important;
+  font-weight: var(--font-weight-normal, inherit) !important;
+  letter-spacing: normal !important;
   color: #404040 !important;
   opacity: 0.92 !important;
   line-height: 1.2 !important;
@@ -49,6 +49,11 @@
   text-overflow: ellipsis;
   user-select: none;
   cursor: pointer;
+}
+
+html[data-ag-custom-font="true"] :is(#ag-live-metrics-pill, .ag-live-metrics-pill) {
+  font-weight: 500 !important;
+  letter-spacing: -0.01em !important;
 }
 
 :is(#ag-live-metrics-pill, .ag-live-metrics-pill):hover,
@@ -90,9 +95,14 @@
   white-space: nowrap;
   font-family: var(--font-sans, inherit) !important;
   font-size: 12px !important;
+  font-weight: var(--font-weight-normal, inherit) !important;
+  letter-spacing: normal !important;
+  color: inherit !important;
+}
+
+html[data-ag-custom-font="true"] :is(#ag-live-metrics-pill, .ag-live-metrics-pill) :is(#ag-live-metrics-text, .ag-live-metrics-text) {
   font-weight: 500 !important;
   letter-spacing: -0.01em !important;
-  color: inherit !important;
 }
 
 #antigravity\.agentSidePanelInputBox :is(#ag-live-metrics-pill, .ag-live-metrics-pill) .ag-sep,
@@ -302,8 +312,12 @@
 
 #ag-live-metrics-tooltip .ag-tt-hdr-left {
   font-size: 13px !important;
-  font-weight: 600 !important;
+  font-weight: var(--font-weight-semibold, 600) !important;
   color: var(--ag-tt-ink) !important;
+}
+
+html[data-ag-custom-font="true"] #ag-live-metrics-tooltip .ag-tt-hdr-left {
+  font-weight: 600 !important;
   letter-spacing: -0.01em;
 }
 
@@ -378,11 +392,15 @@
 #ag-live-metrics-tooltip .ag-tt-gen-chip {
   font-family: var(--font-sans, inherit) !important;
   font-size: 11px !important;
-  font-weight: 550 !important;
+  font-weight: var(--font-weight-medium, 500) !important;
   color: var(--ag-tt-ink-2) !important;
   background-color: var(--ag-tt-chip-bg) !important;
   padding: 2px 7px;
   border-radius: 5px;
+}
+
+html[data-ag-custom-font="true"] #ag-live-metrics-tooltip .ag-tt-gen-chip {
+  font-weight: 550 !important;
   letter-spacing: -0.01em;
 }
 
@@ -421,10 +439,14 @@
 
 #ag-live-metrics-tooltip .ag-tt-bento-val {
   font-size: 16px !important;
-  font-weight: 650 !important;
+  font-weight: var(--font-weight-semibold, 600) !important;
   line-height: 1.2 !important;
-  letter-spacing: -0.02em;
   color: var(--ag-tt-ink) !important;
+}
+
+html[data-ag-custom-font="true"] #ag-live-metrics-tooltip .ag-tt-bento-val {
+  font-weight: 650 !important;
+  letter-spacing: -0.02em;
 }
 
 #ag-live-metrics-tooltip .ag-tt-bento-val.ag-tt-val-good {
@@ -448,11 +470,15 @@
   display: inline-block;
   padding: 0;
   font-size: 16px !important;
-  font-weight: 650 !important;
+  font-weight: var(--font-weight-semibold, 600) !important;
   line-height: 1.2 !important;
-  letter-spacing: -0.02em;
   color: var(--ag-tt-lvl-color) !important;
   background-color: transparent !important;
+}
+
+html[data-ag-custom-font="true"] #ag-live-metrics-tooltip .ag-tt-pill {
+  font-weight: 650 !important;
+  letter-spacing: -0.02em;
 }
 
 #ag-live-metrics-tooltip .ag-tt-bar-blk {
@@ -725,9 +751,9 @@
   font-family: var(--font-sans, inherit) !important;
   font-variant-numeric: tabular-nums;
   font-size: 12px !important;
-  font-weight: 450 !important;
+  font-weight: var(--font-weight-normal, inherit) !important;
   line-height: 1.35 !important;
-  letter-spacing: -0.01em !important;
+  letter-spacing: normal !important;
   color: var(--muted-foreground, #676767) !important;
   opacity: 0.92;
   white-space: nowrap;
@@ -737,6 +763,11 @@
   cursor: default;
 }
 
+html[data-ag-custom-font="true"] .ag-turn-metrics {
+  font-weight: 450 !important;
+  letter-spacing: -0.01em !important;
+}
+
 .ag-turn-metrics:hover {
   opacity: 1;
   color: var(--foreground, #0D0D0D) !important;
@@ -744,9 +775,13 @@
 
 .ag-turn-metrics .ag-turn-model {
   font-family: var(--font-sans, inherit) !important;
-  font-weight: 500 !important;
+  font-weight: var(--font-weight-medium, 500) !important;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+html[data-ag-custom-font="true"] .ag-turn-metrics .ag-turn-model {
+  font-weight: 500 !important;
 }
 
 .ag-turn-metrics .ag-sep {
