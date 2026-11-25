@@ -34,7 +34,7 @@ import (
 	"gravitybox-mygo/resources"
 )
 
-const appVersion = "1.2.13"
+const appVersion = "1.2.14"
 
 var (
 	svgOverview    = mygoui.MustParseSVG([]byte(`<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg>`))
@@ -109,8 +109,9 @@ type App struct {
 
 	controller *cdp.Controller
 	hudBridge  *hud.Bridge
-	refreshing atomic.Bool
-	asarBusy   atomic.Bool
+	refreshing   atomic.Bool
+	refreshAgain atomic.Bool
+	asarBusy     atomic.Bool
 	acctBusy   atomic.Bool
 	relaunch   atomic.Bool
 	syncBusy   atomic.Bool
@@ -360,10 +361,16 @@ func (a *App) pollLoop() {
 
 func (a *App) refreshAsync() {
 	if !a.refreshing.CompareAndSwap(false, true) {
+		a.refreshAgain.Store(true)
 		return
 	}
 	go func() {
-		defer a.refreshing.Store(false)
+		defer func() {
+			a.refreshing.Store(false)
+			if a.refreshAgain.Swap(false) && !a.quitting {
+				a.refreshAsync()
+			}
+		}()
 
 		appDir := config.DetectAntigravityInstallDir(a.cfg.AppPath)
 		running := win32.IsAntigravityRunning()
@@ -776,6 +783,27 @@ func (a *App) checkUpdatesAsync() {
 
 func (a *App) saveConfig() {
 	_ = config.Save(a.cfg)
+	if a.controller != nil {
+		a.controller.UpdateConfig(
+			a.cfg.DebugPort,
+			i18n.ResolveLocale(a.cfg.AppLanguage),
+			a.cfg.TranslationEnabled,
+			a.cfg.HudEnabled,
+			a.asarStatus.IsPatched,
+		)
+		a.controller.UpdateCodexSettings(cdp.CodexSettings{
+			ThemeEnabled:        a.cfg.CodexThemeEnabled,
+			FontOverrideEnabled: a.cfg.CodexFontEnabled,
+			ThemePreset:         a.cfg.CodexThemePreset,
+			TelemetryLayout:     a.cfg.TelemetryLayout,
+			TelemetryCacheMode:  a.cfg.TelemetryCacheMode,
+			ManualContextLimit:  a.cfg.ManualContextLimit,
+			ThemeVars:           config.EffectiveCodexThemeVars(a.cfg),
+		})
+	}
+	if a.hudBridge != nil {
+		a.hudBridge.UpdateTelemetryConfig(a.cfg.TelemetryLayout, a.cfg.TelemetryCacheMode, a.cfg.ManualContextLimit)
+	}
 	a.refreshAsync()
 }
 

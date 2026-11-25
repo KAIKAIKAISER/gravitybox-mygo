@@ -137,7 +137,7 @@ func EffectiveCodexThemeVars(cfg Config) map[string]string {
 		out["--ag-send-btn-shadow"] = "0 2px 6px rgba(217, 119, 6, 0.28)"
 		out["--editor-selection-background"] = "rgba(217, 119, 6, 0.22)"
 	}
-	if cfg.ChatFontSize >= 12 && cfg.ChatFontSize <= 22 {
+	if cfg.CodexFontEnabled && cfg.ChatFontSize >= 12 && cfg.ChatFontSize <= 22 {
 		out["--ag-chat-font-size"] = string(rune('0'+cfg.ChatFontSize/10)) + string(rune('0'+cfg.ChatFontSize%10)) + "px"
 	}
 	for k, v := range cfg.ThemeVars {
@@ -217,6 +217,9 @@ func Load() Config {
 	}
 	if v, ok := parsed["codexThemeEnabled"].(bool); ok {
 		cfg.CodexThemeEnabled = v
+	}
+	if v, ok := parsed["codexFontEnabled"].(bool); ok {
+		cfg.CodexFontEnabled = v
 	}
 	if v, ok := parsed["codexThemePreset"].(string); ok && (v == "auto" || v == "codex-pure-white" || v == "codex-dark") {
 		cfg.CodexThemePreset = v

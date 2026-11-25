@@ -2,7 +2,7 @@
   "name": "GravityBox",
   "slug": "gravitybox",
   "identifier": "io.github.kaikaikaiser.gravitybox",
-  "version": "1.2.13",
+  "version": "1.2.14",
   "out": "build",
   "license": "MIT",
   "resourcesExclude": [
