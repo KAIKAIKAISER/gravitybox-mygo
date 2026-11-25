@@ -40,12 +40,13 @@ type ControllerStatus struct {
 
 // CodexSettings configures Antigravity Codex theme & real-time telemetry injection.
 type CodexSettings struct {
-	ThemeEnabled       bool
-	ThemePreset        string // "auto", "codex-pure-white", "codex-dark"
-	TelemetryLayout    string // "compact", "detailed"
-	TelemetryCacheMode string // "session", "step"
-	ManualContextLimit int
-	ThemeVars          map[string]string
+	ThemeEnabled        bool
+	FontOverrideEnabled bool
+	ThemePreset         string // "auto", "codex-pure-white", "codex-dark"
+	TelemetryLayout     string // "compact", "detailed"
+	TelemetryCacheMode  string // "session", "step"
+	ManualContextLimit  int
+	ThemeVars           map[string]string
 }
 
 // HudHandler coordinates bi-directional runtime HUD metrics over CDP bindings.
@@ -109,28 +110,17 @@ func NewController(debugPort int, locale string, translationEnabled, hudEnabled 
 	if err != nil {
 		return nil, err
 	}
-	dictRaw, err := resources.ReadFile("dict/base.json")
-	if err != nil {
-		return nil, err
-	}
-	var entries map[string]string
-	if err := json.Unmarshal(dictRaw, &entries); err != nil {
-		return nil, err
-	}
-	dictPayload, err := json.Marshal(map[string]any{
-		"schema":  1,
-		"version": "base",
-		"entries": entries,
-	})
+	dictPayload, dictVer, dictCount, err := loadUserZhPackDict(config.StateDir())
 	if err != nil {
 		return nil, err
 	}
 
 	defaultCodex := CodexSettings{
-		ThemeEnabled:       true,
-		ThemePreset:        "auto",
-		TelemetryLayout:    "compact",
-		TelemetryCacheMode: "session",
+		ThemeEnabled:        true,
+		FontOverrideEnabled: true,
+		ThemePreset:         "auto",
+		TelemetryLayout:     "compact",
+		TelemetryCacheMode:  "session",
 	}
 
 	sum := sha256.Sum256([]byte(bundle))
@@ -149,18 +139,113 @@ func NewController(debugPort int, locale string, translationEnabled, hudEnabled 
 		codexFullCSS:       codexFullCSS,
 		codexHudCSS:        codexHudCSS,
 		dictJSON:           dictPayload,
-		dictVer:            "base",
-		dictCount:          len(entries),
+		dictVer:            dictVer,
+		dictCount:          dictCount,
 		sessions:           make(map[string]*attachedSession),
 		hostThemeMode:      make(map[string]string),
 		lastStatus: ControllerStatus{
 			Mode:              "waiting",
-			DictionaryVersion: "base",
-			DictionaryEntries: len(entries),
+			DictionaryVersion: dictVer,
+			DictionaryEntries: dictCount,
 		},
 	}
 	ctrl.codexPatchVersion = ctrl.computeCodexPatchVersionLocked()
 	return ctrl, nil
+}
+
+type zhPackPayloadSpec struct {
+	Schema     int               `json:"schema"`
+	AppVersion string            `json:"appVersion"`
+	UpdatedAt  string            `json:"updatedAt"`
+	Whitelist  []string          `json:"whitelist"`
+	Entries    map[string]string `json:"entries"`
+}
+
+func loadUserZhPackDict(stateDir string) (json.RawMessage, string, int, error) {
+	var spec zhPackPayloadSpec
+	if raw, err := resources.ReadFile("assets/zh-pack.json"); err == nil {
+		_ = json.Unmarshal(raw, &spec)
+	}
+	if stateDir != "" {
+		remotePath := filepath.Join(stateDir, "zh-pack-latest.json")
+		if raw, err := os.ReadFile(remotePath); err == nil {
+			var remote zhPackPayloadSpec
+			if json.Unmarshal(raw, &remote) == nil && len(remote.Entries) > 0 {
+				if len(spec.Entries) == 0 || isNewerZhPackTimestamp(remote.UpdatedAt, spec.UpdatedAt) {
+					spec = remote
+				}
+			}
+		}
+	}
+	if len(spec.Entries) == 0 {
+		return nil, "", 0, os.ErrNotExist
+	}
+
+	wl := make(map[string]struct{}, len(spec.Whitelist))
+	for _, w := range spec.Whitelist {
+		wl[w] = struct{}{}
+	}
+	filtered := make(map[string]string, len(spec.Entries)+2)
+	for k, v := range spec.Entries {
+		if k == "" || v == "" || k == v {
+			continue
+		}
+		if _, blocked := wl[k]; blocked {
+			continue
+		}
+		filtered[k] = v
+	}
+	if _, ok := filtered["Model"]; !ok {
+		filtered["Model"] = "模型"
+	}
+	if _, ok := filtered["Models"]; !ok {
+		filtered["Models"] = "模型"
+	}
+
+	ver := strings.TrimSpace(spec.AppVersion)
+	if ver == "" {
+		ver = "zh-pack"
+	}
+	dictPayload, err := json.Marshal(map[string]any{
+		"schema":  1,
+		"version": ver,
+		"entries": filtered,
+	})
+	if err != nil {
+		return nil, "", 0, err
+	}
+	return dictPayload, ver, len(filtered), nil
+}
+
+func isNewerZhPackTimestamp(candidate, baseline string) bool {
+	if candidate == "" {
+		return false
+	}
+	if baseline == "" {
+		return true
+	}
+	ct, cErr := time.Parse(time.RFC3339Nano, candidate)
+	bt, bErr := time.Parse(time.RFC3339Nano, baseline)
+	if cErr == nil && bErr == nil {
+		return ct.After(bt)
+	}
+	return candidate > baseline
+}
+
+// ReloadDictionary reloads the active user zh-pack localization dictionary into memory.
+func (c *Controller) ReloadDictionary() error {
+	dictPayload, dictVer, dictCount, err := loadUserZhPackDict(config.StateDir())
+	if err != nil {
+		return err
+	}
+	c.mu.Lock()
+	c.dictJSON = dictPayload
+	c.dictVer = dictVer
+	c.dictCount = dictCount
+	c.lastStatus.DictionaryVersion = dictVer
+	c.lastStatus.DictionaryEntries = dictCount
+	c.mu.Unlock()
+	return nil
 }
 
 // SetHudHandler registers the live HUD metrics bridge with the CDP controller.
@@ -870,7 +955,7 @@ func (c *Controller) buildCodexMainBootExpression(isSwarm, codexActive, hudEnabl
 		},
 		"modules": map[string]bool{
 			"theme":             cfg.ThemeEnabled,
-			"i18n":              false,
+			"customFont":        cfg.ThemeEnabled && cfg.FontOverrideEnabled,
 			"metrics":           hudEnabled && !isSwarm,
 			"promptSuggestions": false,
 			"deadlockHealer":    true,

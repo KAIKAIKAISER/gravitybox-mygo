@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 )
 
 const maxHeaderBytes = 16 * 1024 * 1024
@@ -163,7 +164,13 @@ func parseNum(raw json.RawMessage) (int64, error) {
 	return strconv.ParseInt(s, 10, 64)
 }
 
-// InspectApp inspects Antigravity's app.asar and localization tag on disk.
+var (
+	inspectMu     sync.Mutex
+	inspectCacheS string
+	inspectCacheV Status
+)
+
+// InspectApp inspects Antigravity's app.asar and localization tag on disk (cached by file stat signature).
 func InspectApp(appDir string) Status {
 	st := Status{AppDir: appDir}
 	if appDir == "" {
@@ -171,15 +178,28 @@ func InspectApp(appDir string) Status {
 	}
 	resDir := filepath.Join(appDir, "resources")
 	asarPath := filepath.Join(resDir, "app.asar")
-	if _, err := os.Stat(asarPath); err != nil {
+	info, err := os.Stat(asarPath)
+	if err != nil {
 		return st
 	}
+	hasBak := false
+	if _, err := os.Stat(asarPath + ".bak"); err == nil {
+		hasBak = true
+	}
+	sig := fmt.Sprintf("%s|%d:%d:%v", asarPath, info.Size(), info.ModTime().UnixNano(), hasBak)
+
+	inspectMu.Lock()
+	if inspectCacheS == sig {
+		cached := inspectCacheV
+		inspectMu.Unlock()
+		return cached
+	}
+	inspectMu.Unlock()
+
 	st.AppFound = true
 	st.ResourcesDir = resDir
 	st.AsarPath = asarPath
-	if _, err := os.Stat(asarPath + ".bak"); err == nil {
-		st.HasBackup = true
-	}
+	st.HasBackup = hasBak
 
 	arc, err := Open(asarPath)
 	if err != nil {
@@ -220,5 +240,10 @@ func InspectApp(appDir string) Status {
 			}
 		}
 	}
+
+	inspectMu.Lock()
+	inspectCacheS = sig
+	inspectCacheV = st
+	inspectMu.Unlock()
 	return st
 }

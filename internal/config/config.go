@@ -16,6 +16,7 @@ type Config struct {
 	HudEnabled           bool              `json:"hudEnabled"`           // Conversation HUD toggle
 	CodexThemeEnabled    bool              `json:"codexThemeEnabled"`    // Inject Codex day/night theme into Antigravity
 	CodexThemePreset     string            `json:"codexThemePreset"`     // "auto", "codex-pure-white", "codex-dark"
+	CodexFontEnabled     bool              `json:"codexFontEnabled"`     // Override Antigravity UI/chat fonts with system UI fonts
 	TelemetryLayout      string            `json:"telemetryLayout"`      // "compact", "detailed"
 	TelemetryCacheMode   string            `json:"telemetryCacheMode"`   // "session", "step"
 	ManualContextLimit   int               `json:"manualContextLimit"`   // 0 = auto detect from DB, else token limit
@@ -41,6 +42,7 @@ func DefaultConfig() Config {
 		HudEnabled:           true,
 		CodexThemeEnabled:    true,
 		CodexThemePreset:     "auto",
+		CodexFontEnabled:     true,
 		TelemetryLayout:      "compact",
 		TelemetryCacheMode:   "session",
 		ManualContextLimit:   0,

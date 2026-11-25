@@ -17,6 +17,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"gravitybox-mygo/internal/cdp"
@@ -83,22 +84,39 @@ type ApplyResult struct {
 	Message      string
 }
 
-// LoadZhPack loads embedded assets/zh-pack.json, or a newer remote-synced override in stateDir.
-func LoadZhPack(stateDir string) (*ZhPackSpec, error) {
-	var bundled *ZhPackSpec
-	var bundledErr error
-	if raw, err := resources.ReadFile("assets/zh-pack.json"); err != nil {
-		bundledErr = err
-	} else {
+var (
+	zhPackMu        sync.Mutex
+	bundledPackOnce sync.Once
+	bundledPackVal  *ZhPackSpec
+	bundledPackErr  error
+	zhInfoCacheSig  string
+	zhInfoCacheVal  ZhPackInfo
+)
+
+func loadBundledZhPack() (*ZhPackSpec, error) {
+	bundledPackOnce.Do(func() {
+		raw, err := resources.ReadFile("assets/zh-pack.json")
+		if err != nil {
+			bundledPackErr = err
+			return
+		}
 		var p ZhPackSpec
 		if err := json.Unmarshal(raw, &p); err != nil {
-			bundledErr = err
-		} else if p.Schema != 1 || len(p.Entries) == 0 || !strings.Contains(p.RuntimeTemplate, "{{MAP_JSON}}") {
-			bundledErr = errors.New("invalid embedded zh-pack.json")
-		} else {
-			bundled = &p
+			bundledPackErr = err
+			return
 		}
-	}
+		if p.Schema != 1 || len(p.Entries) == 0 || !strings.Contains(p.RuntimeTemplate, "{{MAP_JSON}}") {
+			bundledPackErr = errors.New("invalid embedded zh-pack.json")
+			return
+		}
+		bundledPackVal = &p
+	})
+	return bundledPackVal, bundledPackErr
+}
+
+// LoadZhPack loads embedded assets/zh-pack.json, or a newer remote-synced override in stateDir.
+func LoadZhPack(stateDir string) (*ZhPackSpec, error) {
+	bundled, bundledErr := loadBundledZhPack()
 
 	if stateDir != "" {
 		if raw, err := os.ReadFile(filepath.Join(stateDir, "zh-pack-latest.json")); err == nil {
@@ -674,9 +692,24 @@ type ZhPackInfo struct {
 	Source       string
 }
 
-// GetZhPackInfo returns metadata for the currently active zh-pack (remote-synced or bundled).
+// GetZhPackInfo returns metadata for the currently active zh-pack (remote-synced or bundled),
+// cached by zh-pack-latest.json stat signature to avoid repeated 440 KB JSON unmarshals on UI ticks.
 func GetZhPackInfo(stateDir string) ZhPackInfo {
 	source := "KAIKAIKAISER/antigravity-zh-asar"
+	sig := stateDir + "|none"
+	if stateDir != "" {
+		if st, err := os.Stat(filepath.Join(stateDir, "zh-pack-latest.json")); err == nil {
+			sig = fmt.Sprintf("%s|%d:%d", stateDir, st.Size(), st.ModTime().UnixNano())
+		}
+	}
+	zhPackMu.Lock()
+	if zhInfoCacheSig == sig {
+		info := zhInfoCacheVal
+		zhPackMu.Unlock()
+		return info
+	}
+	zhPackMu.Unlock()
+
 	pack, err := LoadZhPack(stateDir)
 	if err != nil {
 		return ZhPackInfo{Source: source}
@@ -685,12 +718,17 @@ func GetZhPackInfo(stateDir string) ZhPackInfo {
 	if cnt == 0 {
 		cnt = len(pack.Entries)
 	}
-	return ZhPackInfo{
+	info := ZhPackInfo{
 		AppVersion:   pack.AppVersion,
 		EntriesCount: cnt,
 		UpdatedAt:    formatPackTime(pack.UpdatedAt),
 		Source:       source,
 	}
+	zhPackMu.Lock()
+	zhInfoCacheSig = sig
+	zhInfoCacheVal = info
+	zhPackMu.Unlock()
+	return info
 }
 
 func formatPackTime(iso string) string {

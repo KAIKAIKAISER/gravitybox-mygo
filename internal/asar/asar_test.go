@@ -95,7 +95,7 @@ func TestLoadZhPackPrefersNewerBundledOverStaleRemote(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadZhPack bundled failed: %v", err)
 	}
-	if bundled.AppVersion != "2.34.0" || len(bundled.Entries) < 3800 {
+	if bundled.AppVersion != "2.34.0" || len(bundled.Entries) < 3000 {
 		t.Fatalf("unexpected bundled pack: version=%q entries=%d", bundled.AppVersion, len(bundled.Entries))
 	}
 

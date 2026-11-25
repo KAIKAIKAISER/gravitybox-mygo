@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"path/filepath"
 	"runtime"
+	"runtime/debug"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -33,7 +34,7 @@ import (
 	"gravitybox-mygo/resources"
 )
 
-const appVersion = "1.2.12"
+const appVersion = "1.2.13"
 
 var (
 	svgOverview    = mygoui.MustParseSVG([]byte(`<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg>`))
@@ -114,6 +115,8 @@ type App struct {
 	relaunch   atomic.Bool
 	syncBusy   atomic.Bool
 	updBusy    atomic.Bool
+	mainOpen   atomic.Bool
+	popoverOpen atomic.Bool
 
 	// Live probe state
 	antigravityRunning bool
@@ -127,6 +130,7 @@ type App struct {
 	currentAccountID   string
 	savedAccounts      []accounts.SavedAccount
 	lastProbeAt        time.Time
+	lastCacheScanAt    time.Time
 	statusNotice       string
 	accountNotice      string
 	updateNotice       string
@@ -157,6 +161,7 @@ type App struct {
 
 	// Run initializes and runs the GravityBox application.
 func Run() error {
+	debug.SetMemoryLimit(96 << 20)
 	cfg := config.Load()
 	ctrl, err := cdp.NewController(cfg.DebugPort, i18n.ResolveLocale(cfg.AppLanguage), cfg.TranslationEnabled, cfg.HudEnabled)
 	if err != nil {
@@ -167,12 +172,13 @@ func Run() error {
 	hudBridge.UpdateTelemetryConfig(cfg.TelemetryLayout, cfg.TelemetryCacheMode, cfg.ManualContextLimit)
 	ctrl.SetHudHandler(hudBridge)
 	ctrl.UpdateCodexSettings(cdp.CodexSettings{
-		ThemeEnabled:       cfg.CodexThemeEnabled,
-		ThemePreset:        cfg.CodexThemePreset,
-		TelemetryLayout:    cfg.TelemetryLayout,
-		TelemetryCacheMode: cfg.TelemetryCacheMode,
-		ManualContextLimit: cfg.ManualContextLimit,
-		ThemeVars:          config.EffectiveCodexThemeVars(cfg),
+		ThemeEnabled:        cfg.CodexThemeEnabled,
+		FontOverrideEnabled: cfg.CodexFontEnabled,
+		ThemePreset:         cfg.CodexThemePreset,
+		TelemetryLayout:     cfg.TelemetryLayout,
+		TelemetryCacheMode:  cfg.TelemetryCacheMode,
+		ManualContextLimit:  cfg.ManualContextLimit,
+		ThemeVars:           config.EffectiveCodexThemeVars(cfg),
 	})
 	asCfg := accounts.LoadAutoSwitch()
 	app := &App{
@@ -267,9 +273,12 @@ func (a *App) onReady() {
 		Hidden:    a.cfg.StartInTray,
 		Content:   mygoui.View(a.mainView),
 	})
+	a.mainOpen.Store(!a.cfg.StartInTray)
+	a.popoverOpen.Store(false)
 	a.mainWin.OnClose(func(e *mygo.CloseEvent) {
 		if !a.quitting {
 			e.PreventDefault()
+			a.mainOpen.Store(false)
 			a.mainWin.Hide()
 		}
 	})
@@ -288,10 +297,14 @@ func (a *App) onReady() {
 		SkipTaskbar:       true,
 		Content:           mygoui.View(a.popoverView),
 	})
-	a.popoverWin.OnBlur(a.popoverWin.Hide)
+	a.popoverWin.OnBlur(func() {
+		a.popoverOpen.Store(false)
+		a.popoverWin.Hide()
+	})
 	a.popoverWin.OnClose(func(e *mygo.CloseEvent) {
 		if !a.quitting {
 			e.PreventDefault()
+			a.popoverOpen.Store(false)
 			a.popoverWin.Hide()
 		}
 	})
@@ -314,6 +327,7 @@ func (a *App) onReady() {
 	} else {
 		a.tray.OnClick(a.togglePopover)
 		a.tray.OnRightClick(func() {
+			a.popoverOpen.Store(false)
 			a.popoverWin.Hide()
 			a.tray.SetMenu(menu)
 			defer a.tray.SetMenu(nil)
@@ -354,7 +368,7 @@ func (a *App) refreshAsync() {
 		appDir := config.DetectAntigravityInstallDir(a.cfg.AppPath)
 		running := win32.IsAntigravityRunning()
 		asarSt := asar.InspectApp(appDir)
-		packInfo := asar.GetZhPackInfo(config.StateDir())
+		uiVisible := a.mainOpen.Load() || a.popoverOpen.Load() || a.lastProbeAt.IsZero()
 
 		a.controller.UpdateConfig(
 			a.cfg.DebugPort,
@@ -364,12 +378,13 @@ func (a *App) refreshAsync() {
 			asarSt.IsPatched,
 		)
 		a.controller.UpdateCodexSettings(cdp.CodexSettings{
-			ThemeEnabled:       a.cfg.CodexThemeEnabled,
-			ThemePreset:        a.cfg.CodexThemePreset,
-			TelemetryLayout:    a.cfg.TelemetryLayout,
-			TelemetryCacheMode: a.cfg.TelemetryCacheMode,
-			ManualContextLimit: a.cfg.ManualContextLimit,
-			ThemeVars:          config.EffectiveCodexThemeVars(a.cfg),
+			ThemeEnabled:        a.cfg.CodexThemeEnabled,
+			FontOverrideEnabled: a.cfg.CodexFontEnabled,
+			ThemePreset:         a.cfg.CodexThemePreset,
+			TelemetryLayout:     a.cfg.TelemetryLayout,
+			TelemetryCacheMode:  a.cfg.TelemetryCacheMode,
+			ManualContextLimit:  a.cfg.ManualContextLimit,
+			ThemeVars:           config.EffectiveCodexThemeVars(a.cfg),
 		})
 		if a.hudBridge != nil {
 			a.hudBridge.UpdateTelemetryConfig(a.cfg.TelemetryLayout, a.cfg.TelemetryCacheMode, a.cfg.ManualContextLimit)
@@ -388,20 +403,35 @@ func (a *App) refreshAsync() {
 			}
 		}
 
-		acctFilter := a.usageAcctFilter
-		if acctFilter == "全部账号" || acctFilter == "" {
-			acctFilter = "all"
-		}
-		uCtx, uCancel := context.WithTimeout(context.Background(), 8*time.Second)
-		uSum := usage.LoadSummary(uCtx, a.usagePeriod, acctFilter)
-		popSum := uSum
-		if a.popoverPeriod != a.usagePeriod || acctFilter != "all" {
-			popSum = usage.LoadSummary(uCtx, a.popoverPeriod, "all")
-		}
-		uCancel()
+		var packInfo asar.ZhPackInfo
+		var uSum, popSum usage.Summary
+		var curID string
+		var savedList []accounts.SavedAccount
+		var items []maintenance.CacheItem
+		var total int64
+		scannedCaches := false
 
-		curID, savedList, _ := accounts.ListSaved()
-		items, total := maintenance.ScanSafeCaches()
+		if uiVisible {
+			packInfo = asar.GetZhPackInfo(config.StateDir())
+
+			acctFilter := a.usageAcctFilter
+			if acctFilter == "全部账号" || acctFilter == "" {
+				acctFilter = "all"
+			}
+			uCtx, uCancel := context.WithTimeout(context.Background(), 8*time.Second)
+			uSum = usage.LoadSummary(uCtx, a.usagePeriod, acctFilter)
+			popSum = uSum
+			if a.popoverPeriod != a.usagePeriod || acctFilter != "all" {
+				popSum = usage.LoadSummary(uCtx, a.popoverPeriod, "all")
+			}
+			uCancel()
+
+			curID, savedList, _ = accounts.ListSaved()
+			if a.lastCacheScanAt.IsZero() || time.Since(a.lastCacheScanAt) >= 60*time.Second {
+				items, total = maintenance.ScanSafeCaches()
+				scannedCaches = true
+			}
+		}
 
 		if a.cfg.FollowAntigravity {
 			if running {
@@ -416,15 +446,20 @@ func (a *App) refreshAsync() {
 			a.appDir = appDir
 			a.antigravityRunning = running
 			a.asarStatus = asarSt
-			a.zhPackInfo = packInfo
 			a.cdpStatus = cdpSt
 			a.liveQuota = liveQ
-			a.usageSummary = uSum
-			a.popoverUsage = popSum
-			a.currentAccountID = curID
-			a.savedAccounts = savedList
-			a.cacheItems = items
-			a.cacheTotalBytes = total
+			if uiVisible {
+				a.zhPackInfo = packInfo
+				a.usageSummary = uSum
+				a.popoverUsage = popSum
+				a.currentAccountID = curID
+				a.savedAccounts = savedList
+				if scannedCaches {
+					a.cacheItems = items
+					a.cacheTotalBytes = total
+					a.lastCacheScanAt = time.Now()
+				}
+			}
 			a.lastProbeAt = time.Now()
 			a.invalidateVisible()
 		})
@@ -432,11 +467,19 @@ func (a *App) refreshAsync() {
 }
 
 func (a *App) invalidateVisible() {
-	if a.mainWin != nil && a.mainWin.IsVisible() {
-		a.mainWin.Invalidate()
+	if a.mainWin != nil {
+		vis := a.mainWin.IsVisible()
+		a.mainOpen.Store(vis)
+		if vis {
+			a.mainWin.Invalidate()
+		}
 	}
-	if a.popoverWin != nil && a.popoverWin.IsVisible() {
-		a.popoverWin.Invalidate()
+	if a.popoverWin != nil {
+		vis := a.popoverWin.IsVisible()
+		a.popoverOpen.Store(vis)
+		if vis {
+			a.popoverWin.Invalidate()
+		}
 	}
 }
 
@@ -445,12 +488,15 @@ func (a *App) showMain(nav string) {
 		a.activeNav = nav
 	}
 	if a.popoverWin != nil {
+		a.popoverOpen.Store(false)
 		a.popoverWin.Hide()
 	}
 	if a.mainWin != nil {
+		a.mainOpen.Store(true)
 		a.mainWin.Show()
 		a.mainWin.Invalidate()
 	}
+	a.refreshAsync()
 }
 
 func (a *App) togglePopover() {
@@ -458,6 +504,7 @@ func (a *App) togglePopover() {
 		return
 	}
 	if a.popoverWin.IsVisible() {
+		a.popoverOpen.Store(false)
 		a.popoverWin.Hide()
 		return
 	}
@@ -479,6 +526,7 @@ func (a *App) togglePopover() {
 		y = max(area.Y, min(y, area.Y+max(0, area.Height-b.Height)))
 		a.popoverWin.SetPosition(x, y)
 	}
+	a.popoverOpen.Store(true)
 	a.popoverWin.Show()
 	a.refreshAsync()
 }
@@ -580,6 +628,9 @@ func (a *App) syncZhPackAsync() {
 			if err != nil {
 				a.statusNotice = err.Error()
 			} else {
+				if a.controller != nil {
+					_ = a.controller.ReloadDictionary()
+				}
 				a.statusNotice = msg
 			}
 			a.invalidateVisible()

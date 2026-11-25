@@ -8,7 +8,6 @@
     modules: Object.assign({}, MODULES),
     telemetryLayout: boot.telemetryLayout || 'compact',
     themeVars: Object.assign({}, THEME_VARS),
-    dict: typeof DICT !== 'undefined' ? DICT : {},
     get metrics() {
       return window.__ag_last_metrics || null;
     },
@@ -48,24 +47,8 @@
       document.documentElement.removeAttribute('data-ag-preset');
       document.documentElement.removeAttribute('data-ag-theme-mode');
     }
-    if (MODULES.i18n && document.body && typeof scanBodyFn === 'function') {
-      scanBodyFn(document.body);
-      if (window.__ag_i18n_observer && typeof I18N_OBS_OPTS !== 'undefined') {
-        try {
-          window.__ag_i18n_observer.observe(document.body, I18N_OBS_OPTS);
-        } catch (e) {}
-      }
-    } else if (document.body) {
-      restoreAllTranslations(document.body);
-    }
     if (typeof checkRouteAndMountMetrics === 'function') {
       checkRouteAndMountMetrics();
-    }
-    if (typeof mountPromptSuggestions === 'function') {
-      mountPromptSuggestions();
-    }
-    if (typeof mountCodexSettingsUi === 'function') {
-      mountCodexSettingsUi();
     }
     ensureStylesAtEndOfHead();
   }

@@ -175,6 +175,7 @@ func (a *App) renderModals(c *mygoui.Context) {
 			mygoui.Row(c).Gap(8).AlignItems(mygoui.Center).Children(func() {
 				mygoui.Text(c, fmt.Sprintf("可安全释放缓存：%s", maintenance.FormatBytes(a.cacheTotalBytes))).Bold().Grow(1)
 				if mygoui.Button(c, "重新扫描").Clicked() {
+					a.lastCacheScanAt = time.Time{}
 					a.refreshAsync()
 				}
 				if mygoui.PrimaryButton(c, "清理选中项").Disabled(a.cacheTotalBytes == 0).Clicked() {
@@ -184,6 +185,7 @@ func (a *App) renderModals(c *mygoui.Context) {
 					} else {
 						a.lastCleanMsg = fmt.Sprintf("已清理 %d 项，释放 %s", movedCount, maintenance.FormatBytes(movedBytes))
 					}
+					a.lastCacheScanAt = time.Time{}
 					a.refreshAsync()
 				}
 			})

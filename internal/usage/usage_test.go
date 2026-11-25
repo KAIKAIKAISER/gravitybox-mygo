@@ -21,12 +21,16 @@ func resetUsageCachesForTest() {
 	ledgerDBKeys = nil
 	ledgerEventKeys = nil
 	convCache = make(map[string]convFileCacheEntry)
+	convCacheLedgerSig = ""
 	acctEmailByID = make(map[string]string)
 	acctIDByEmail = make(map[string]string)
 	acctMapSig = ""
 	obsTimeline = nil
 	obsSig = ""
 	sessionObs = nil
+	internTable = make(map[string]string)
+	summaryCacheWorldSig = ""
+	summaryCache = make(map[summaryCacheKey]Summary)
 	cacheMu.Unlock()
 }
 
@@ -263,4 +267,74 @@ func TestLiveUsageSummaryIfPresent(t *testing.T) {
 	sAll := LoadSummary(ctx, 3, "all")
 	t.Logf("All(warm): elapsed=%s totalTokens=%d totalReqs=%d totalUSD=%.2f models=%d",
 		time.Since(t1), sAll.TotalTokens, sAll.TotalRequests, sAll.TotalUSD, len(sAll.Models))
+}
+
+func TestSummaryCacheInvalidatesOnSessionAccountSwitch(t *testing.T) {
+	resetUsageCachesForTest()
+	t.Cleanup(resetUsageCachesForTest)
+
+	tmp := t.TempDir()
+	appData := filepath.Join(tmp, "roaming")
+	t.Setenv("APPDATA", appData)
+	t.Setenv("XDG_CONFIG_HOME", appData)
+	t.Setenv("USERPROFILE", tmp)
+	t.Setenv("HOME", tmp)
+
+	stateDir := config.StateDir()
+	convDir := filepath.Join(config.GeminiDir(), "antigravity", "conversations")
+	if err := os.MkdirAll(stateDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(convDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	dbPath := filepath.Join(convDir, "cache-test.db")
+	cdb, err := sqlite.Open(ctx, dbPath, sqlite.OpenOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, stmt := range []string{
+		`CREATE TABLE steps(idx INTEGER PRIMARY KEY, step_type INTEGER, status INTEGER, metadata BLOB)`,
+		`CREATE TABLE gen_metadata(idx INTEGER PRIMARY KEY, data BLOB)`,
+	} {
+		if _, err = cdb.Query(ctx, stmt); err != nil {
+			_ = cdb.Close()
+			t.Fatal(err)
+		}
+	}
+	now := time.Now().Unix()
+	eventTs := now - 5
+	tsBlob := append(pbVarintField(1, uint64(eventTs)), pbVarintField(2, 0)...)
+	stepMeta := pbBytesField(1, tsBlob)
+	if _, err := cdb.Query(ctx, "INSERT INTO steps(idx, step_type, status, metadata) VALUES (1, 15, 3, ?)", stepMeta); err != nil {
+		_ = cdb.Close()
+		t.Fatal(err)
+	}
+	u := append(pbVarintField(2, 200), pbVarintField(3, 50)...)
+	chatMeta := pbBytesField(4, u)
+	chatMeta = append(chatMeta, pbBytesField(19, []byte("gemini-4-hydrogen"))...)
+	outer := pbBytesField(1, chatMeta)
+	outer = append(outer, pbBytesField(2, pbVarint(1))...)
+	if _, err := cdb.Query(ctx, "INSERT INTO gen_metadata(idx, data) VALUES (0, ?)", outer); err != nil {
+		_ = cdb.Close()
+		t.Fatal(err)
+	}
+	_ = cdb.Close()
+
+	SetActiveAccountEmail("first@example.com")
+	sBefore := LoadSummary(ctx, 0, "second@example.com")
+	if sBefore.PeriodRequests != 0 {
+		t.Fatalf("expected second@example.com=0 reqs before switch, got %d", sBefore.PeriodRequests)
+	}
+
+	// Switching session account must invalidate summary cache even with zero disk changes.
+	SetActiveAccountEmail("second@example.com")
+	sAfter := LoadSummary(ctx, 0, "second@example.com")
+	if sAfter.PeriodRequests != 1 || sAfter.PeriodTokens != 250 {
+		t.Fatalf("expected second@example.com=1 req/250 tok after switch, got reqs=%d tok=%d", sAfter.PeriodRequests, sAfter.PeriodTokens)
+	}
 }

@@ -20,9 +20,8 @@
   const MODULES = Object.assign(
     {
       theme: true,
-      i18n: true,
+      customFont: true,
       metrics: true,
-      promptSuggestions: false,
       deadlockHealer: true,
       zoomShortcuts: true,
       cdpAutoRelaunch: true,
@@ -33,16 +32,13 @@
   );
 
   const DEFAULT_PRESET = boot.preset || 'codex-pure-white';
-  const DEFAULT_EXCLUDE_I18N =
-    'code, pre, kbd, samp, textarea, input, style, script, noscript, [contenteditable="true"], [data-markdown-root], [data-testid="user-message-content"], .agy-user-bubble, .monaco-editor, .monaco-diff-editor, .xterm, [class*="onyx-key"], .prose, .markdown, [class*="chat-message"], [class*="group/file-title"], [data-testid="conversation-row-sidebar"] a[href^="/c/"], [data-testid="conversation-row-sidebar"] span.truncate, [data-testid="conversation-row-history"] a[href^="/c/"], [data-testid="conversation-row-history"] span.truncate, [data-testid="conversation-navigator-turn"], #ag-live-metrics-pill, .ag-live-metrics-pill, #ag-live-metrics-tooltip, #ag-turn-metrics-tooltip, .ag-turn-metrics, .ag-prompt-ghost-overlay, .ag-prompt-ghost-text, .ag-prompt-ghost-kbd, #ag-settings-nav-wrap, #ag-settings-pane, #ag-settings-model-menu, #ag-settings-effort-menu';
 
   const SELECTORS = Object.assign(
     {
       inputBoxId: 'antigravity.agentSidePanelInputBox',
       branchPillInBox:
         '[data-testid="branch-pill-trigger"], [data-testid="project-branch-picker"], [data-testid="project-selector-trigger"], [data-testid="location-selector-trigger"], [aria-label^="Select project"], [aria-label^="选择项目"]',
-      homeGreeting: '[data-testid="home-greeting"], [data-testid="home-splash-content"]',
-      excludeI18n: DEFAULT_EXCLUDE_I18N
+      homeGreeting: '[data-testid="home-greeting"], [data-testid="home-splash-content"]'
     },
     boot.selectors || {}
   );
@@ -67,54 +63,6 @@
       window.__ag_turn_metrics_observer.disconnect();
     } catch (e) {}
     window.__ag_turn_metrics_observer = null;
-  }
-
-  if (!window.__ag_orig_text_map) {
-    window.__ag_orig_text_map = new WeakMap();
-  }
-  const origTextMap = window.__ag_orig_text_map;
-
-  function restoreAllTranslations(root = document.body) {
-    if (!root) return;
-    try {
-      const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
-      while (walker.nextNode()) {
-        const node = walker.currentNode;
-        const rec = origTextMap.get(node);
-        if (rec) {
-          if (node.nodeValue === rec.lastVal) {
-            node.nodeValue = rec.origRaw;
-          }
-          origTextMap.delete(node);
-        }
-      }
-      const attrNames = ['title', 'placeholder', 'aria-label'];
-      const attrEls = root.querySelectorAll
-        ? root.querySelectorAll(
-            '[data-ag-orig-title], [data-ag-orig-title-last], [data-ag-orig-placeholder], [data-ag-orig-placeholder-last], [data-ag-orig-aria-label], [data-ag-orig-aria-label-last]'
-          )
-        : [];
-      for (let i = 0; i < attrEls.length; i++) {
-        const el = attrEls[i];
-        for (let j = 0; j < attrNames.length; j++) {
-          const attr = attrNames[j];
-          const origAttr = 'data-ag-orig-' + attr;
-          const lastAttr = origAttr + '-last';
-          if (el.hasAttribute(origAttr) || el.hasAttribute(lastAttr)) {
-            const savedOrig = el.getAttribute(origAttr);
-            const savedLast = el.getAttribute(lastAttr);
-            const cur = el.getAttribute(attr);
-            if (savedOrig !== null && (savedLast === null || cur === savedLast)) {
-              el.setAttribute(attr, savedOrig);
-            }
-            el.removeAttribute(origAttr);
-            el.removeAttribute(lastAttr);
-            delete el['__ag_attr_ver_' + attr];
-          }
-        }
-        delete el.__ag_attr_ver;
-      }
-    } catch (e) {}
   }
 
   function applyThemeVars(varsObj) {
@@ -213,41 +161,10 @@
     document.querySelectorAll('[data-ag-has-suggestion]').forEach((el) => el.removeAttribute('data-ag-has-suggestion'));
     document.querySelectorAll('[data-ag-codex-settings-open]').forEach((el) => el.removeAttribute('data-ag-codex-settings-open'));
     document.querySelectorAll('[data-ag-settings-right-pane]').forEach((el) => el.removeAttribute('data-ag-settings-right-pane'));
-    if (window.__ag_i18n_observer) {
-      try { window.__ag_i18n_observer.disconnect(); } catch (e) {}
-      window.__ag_i18n_observer = null;
-    }
-    if (window.__ag_metrics_ro) {
-      try { window.__ag_metrics_ro.disconnect(); } catch (e) {}
-      window.__ag_metrics_ro = null;
-      window.__ag_metrics_ro_target = null;
-      window.__ag_metrics_ro_observed = null;
-      window.__ag_last_metrics_layout_sig = '';
-    }
-    if (window.__ag_metrics_route_watcher) {
-      try { clearInterval(window.__ag_metrics_route_watcher); } catch (e) {}
-      window.__ag_metrics_route_watcher = null;
-    }
-    if (window.__ag_pending_wait_timer) {
-      try { clearInterval(window.__ag_pending_wait_timer); } catch (e) {}
-      window.__ag_pending_wait_timer = null;
-    }
-    if (window.__ag_live_probe_timer) {
-      try { clearInterval(window.__ag_live_probe_timer); } catch (e) {}
-      window.__ag_live_probe_timer = null;
-    }
-    if (window.__ag_theme_mode_observer) {
-      try { window.__ag_theme_mode_observer.disconnect(); } catch (e) {}
-      window.__ag_theme_mode_observer = null;
-    }
-    window.__ag_zoom_keydown_fn = null;
-    window.__ag_settings_click_fn = null;
-    window.__ag_body_ready = false;
     applyThemeVars({});
-    for (const attr of ['data-ag-preset', 'data-ag-theme-mode', 'data-ag-force-mode', 'data-ag-page-type', 'data-ag-os', 'data-ag-custom-font-size']) {
+    for (const attr of ['data-ag-preset', 'data-ag-theme-mode', 'data-ag-force-mode', 'data-ag-page-type', 'data-ag-os', 'data-ag-custom-font', 'data-ag-custom-font-size']) {
       document.documentElement.removeAttribute(attr);
     }
-    restoreAllTranslations(document.body);
     window.__ag_patch_version = PATCH_VERSION + '-disabled';
     return;
   }
@@ -272,9 +189,14 @@
   }
   if (MODULES.theme !== false) {
     applyThemeVars(THEME_VARS);
+    if (MODULES.customFont === true) {
+      document.documentElement.setAttribute('data-ag-custom-font', 'true');
+    } else {
+      document.documentElement.removeAttribute('data-ag-custom-font');
+    }
   } else {
     applyThemeVars({});
-    for (const attr of ['data-ag-preset', 'data-ag-theme-mode', 'data-ag-force-mode', 'data-ag-custom-font-size']) {
+    for (const attr of ['data-ag-preset', 'data-ag-theme-mode', 'data-ag-force-mode', 'data-ag-custom-font', 'data-ag-custom-font-size']) {
       document.documentElement.removeAttribute(attr);
     }
   }

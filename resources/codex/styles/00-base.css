@@ -2,17 +2,16 @@
  * core/styles/00-base.css — Shared Typography, Geometry & Compatibility Layer
  * ============================================================================ */
 
-:root,
-html,
-body,
-body[data-agy-theme],
-body[data-agy-theme] :where(.font-sans),
-body[data-agy-font],
-body[data-agy-font="google-sans"],
-body[data-agy-font="inter"],
-body[data-agy-font] :where(.font-sans),
-body[data-agy-theme] :where(.font-mono),
-body[data-agy-font] :where(.font-mono) {
+html[data-ag-custom-font="true"],
+html[data-ag-custom-font="true"] body,
+html[data-ag-custom-font="true"] body[data-agy-theme],
+html[data-ag-custom-font="true"] body[data-agy-theme] :where(.font-sans),
+html[data-ag-custom-font="true"] body[data-agy-font],
+html[data-ag-custom-font="true"] body[data-agy-font="google-sans"],
+html[data-ag-custom-font="true"] body[data-agy-font="inter"],
+html[data-ag-custom-font="true"] body[data-agy-font] :where(.font-sans),
+html[data-ag-custom-font="true"] body[data-agy-theme] :where(.font-mono),
+html[data-ag-custom-font="true"] body[data-agy-font] :where(.font-mono) {
   --vscode-font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Microsoft YaHei UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', sans-serif !important;
   --font-sans: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Microsoft YaHei UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', sans-serif !important;
   --default-font-family: var(--font-sans) !important;
@@ -36,11 +35,16 @@ body[data-agy-font] :where(.font-mono) {
   --ag-chat-font-size: 15px;
 }
 
+html[data-ag-custom-font="true"] body,
+html[data-ag-custom-font="true"] body[data-agy-font],
+html[data-ag-custom-font="true"] body[data-agy-font="google-sans"] {
+  font-weight: 400 !important;
+  font-variation-settings: normal !important;
+}
+
 body,
 body[data-agy-font],
 body[data-agy-font="google-sans"] {
-  font-weight: 400 !important;
-  font-variation-settings: normal !important;
   color: var(--foreground) !important;
 }
 
@@ -55,39 +59,44 @@ body[data-agy-font="google-sans"]:not([data-has-browser-hole="true"]) {
   background-color: var(--sidebar) !important;
 }
 
-body[data-agy-font] :where(.font-sans, h1, h2, h3, h4, h5, h6, b, strong, i, em, .italic) {
+html[data-ag-custom-font="true"] body[data-agy-font] :where(.font-sans, h1, h2, h3, h4, h5, h6, b, strong, i, em, .italic) {
   --agy-gsf-bold-wght: 600 !important;
   font-variation-settings: normal !important;
 }
 
-body[data-agy-font] :where(i, em, .italic):not(.codicon, .google-symbols) {
+html[data-ag-custom-font="true"] body[data-agy-font] :where(i, em, .italic):not(.codicon, .google-symbols) {
   font-style: italic !important;
 }
 
-html, body, body[data-agy-font], button, select, nav, header, aside {
+html[data-ag-custom-font="true"],
+html[data-ag-custom-font="true"] body,
+html[data-ag-custom-font="true"] body[data-agy-font],
+html[data-ag-custom-font="true"] :is(button, select, nav, header, aside) {
   font-family: var(--font-sans) !important;
   -webkit-font-smoothing: antialiased;
 }
 
-[data-markdown-root],
-[data-testid="user-message-content"],
-.agy-user-bubble,
-.select-text,
-.prose,
-.markdown,
-article,
-div[contenteditable="true"],
-textarea,
-[data-lexical-editor="true"],
-[data-lexical-editor="true"] :is(p, span, div),
-[data-lexical-editor="true"] ~ p.pointer-events-none,
-#antigravity\.agentSidePanelInputBox div:has(> [data-lexical-editor="true"]) > p.pointer-events-none,
-:is([data-markdown-root], .select-text, .prose, .markdown, article) :is(p, li, blockquote, h1, h2, h3, h4, h5, h6, td, th) {
+html[data-ag-custom-font="true"] :is(
+  [data-markdown-root],
+  [data-testid="user-message-content"],
+  .agy-user-bubble,
+  .select-text,
+  .prose,
+  .markdown,
+  article,
+  div[contenteditable="true"],
+  textarea,
+  [data-lexical-editor="true"],
+  [data-lexical-editor="true"] :is(p, span, div),
+  [data-lexical-editor="true"] ~ p.pointer-events-none,
+  #antigravity\.agentSidePanelInputBox div:has(> [data-lexical-editor="true"]) > p.pointer-events-none,
+  :is([data-markdown-root], .select-text, .prose, .markdown, article) :is(p, li, blockquote, h1, h2, h3, h4, h5, h6, td, th)
+) {
   font-family: var(--font-sans) !important;
   letter-spacing: -0.01em !important;
 }
 
-:is([data-markdown-root], .select-text, .prose, .markdown) :is(p, li, blockquote) {
+html[data-ag-custom-font="true"] :is([data-markdown-root], .select-text, .prose, .markdown) :is(p, li, blockquote) {
   line-height: 1.62;
 }
 
@@ -95,14 +104,16 @@ html[data-ag-custom-font-size="true"] :is([data-markdown-root], [data-testid="us
   font-size: var(--ag-chat-font-size) !important;
 }
 
-code, pre, kbd, samp, .font-mono, [class*="language-"], .monaco-editor, .xterm, pre *,
-[class*="group/file-title"], [class*="group/file-title"] *, [class*="file-title"], [class*="file-path"],
-[data-path], [data-file-path], :is([data-markdown-root], .select-text) :is(code, pre, kbd, samp, .font-mono) {
+html[data-ag-custom-font="true"] :is(
+  code, pre, kbd, samp, .font-mono, [class*="language-"], .monaco-editor, .xterm, pre *,
+  [class*="group/file-title"], [class*="group/file-title"] *, [class*="file-title"], [class*="file-path"],
+  [data-path], [data-file-path], :is([data-markdown-root], .select-text) :is(code, pre, kbd, samp, .font-mono)
+) {
   font-family: var(--font-mono) !important;
 }
 
-#antigravity\.agentSidePanelInputBox [data-lexical-editor="true"],
-#antigravity\.agentSidePanelInputBox [data-lexical-editor="true"] span[data-lexical-text="true"] {
+html[data-ag-custom-font="true"] #antigravity\.agentSidePanelInputBox [data-lexical-editor="true"],
+html[data-ag-custom-font="true"] #antigravity\.agentSidePanelInputBox [data-lexical-editor="true"] span[data-lexical-text="true"] {
   font-weight: 400 !important;
   letter-spacing: normal !important;
 }
@@ -168,7 +179,7 @@ body[data-agy-theme][data-newux-theme="onyx"] .surface-composer:focus-within > .
   color: var(--ag-composer-top-hover-fg, #0D0D0D) !important;
 }
 
-#antigravity\.agentSidePanelInputBox :is([class*="text-secondary-foreground"], button, span):not([data-lexical-editor="true"]):not([data-lexical-editor="true"] *) {
+html[data-ag-custom-font="true"] #antigravity\.agentSidePanelInputBox :is([class*="text-secondary-foreground"], button, span):not([data-lexical-editor="true"]):not([data-lexical-editor="true"] *) {
   font-weight: 500 !important;
   letter-spacing: -0.012em !important;
 }
@@ -199,7 +210,6 @@ body[data-agy-theme][data-newux-theme="onyx"] .surface-composer:focus-within > .
 
 /* Single-ring search input focus while preserving checkbox/radio/range accessibility */
 input[placeholder*="Search"],
-input[data-ag-orig-placeholder*="Search"],
 [data-testid="new-tab-search-input"],
 input:not([type="checkbox"]):not([type="radio"]):not([type="range"])[class*="focus:border-primary"],
 input:not([type="checkbox"]):not([type="radio"]):not([type="range"])[class*="focus:border-ring"] {
@@ -207,7 +217,6 @@ input:not([type="checkbox"]):not([type="radio"]):not([type="range"])[class*="foc
 }
 
 input[placeholder*="Search"]:is(:focus, :focus-visible),
-input[data-ag-orig-placeholder*="Search"]:is(:focus, :focus-visible),
 [data-testid="new-tab-search-input"]:is(:focus, :focus-visible),
 input:not([type="checkbox"]):not([type="radio"]):not([type="range"])[class*="focus:border-primary"]:is(:focus, :focus-visible),
 input:not([type="checkbox"]):not([type="radio"]):not([type="range"])[class*="focus:border-ring"]:is(:focus, :focus-visible) {
@@ -232,11 +241,9 @@ html[data-ag-preset] #antigravity\.agentSidePanelInputBox [data-testid="voice-li
   display: flex !important;
 }
 
-/* Sidebar, menus & dialogs typography */
+/* Sidebar, menus & dialogs colors */
 .bg-sidebar :is(a, button, [class*="truncate"], [class*="text-sm"], [class*="text-xs"]),
 aside :is(a, button) {
-  font-weight: 450 !important;
-  letter-spacing: -0.012em !important;
   color: var(--ag-sidebar-fg, #171717) !important;
 }
 
@@ -244,8 +251,6 @@ aside :is(a, button) {
 .bg-sidebar [data-testid="conversation-row-sidebar"]:not([data-selected="true"]) [class*="truncate"],
 .agy-sidebar-row:not([data-selected="true"]) span.truncate,
 aside [data-testid="conversation-row-sidebar"]:not([data-selected="true"]) span {
-  font-weight: 400 !important;
-  letter-spacing: -0.005em !important;
   color: var(--ag-sidebar-row-fg, #262626) !important;
 }
 
@@ -254,14 +259,11 @@ button[data-project-card="true"],
 [data-project-label],
 [data-subtext] span[class*="text-muted"],
 .bg-sidebar span:has(> svg) + span {
-  font-weight: 450 !important;
   color: var(--ag-sidebar-header-fg, #404040) !important;
 }
 
 button[data-testid="project-header"] span,
 button[data-project-card="true"] span {
-  font-weight: 450 !important;
-  letter-spacing: -0.01em !important;
   color: var(--ag-sidebar-header-title-fg, #171717) !important;
 }
 
@@ -271,37 +273,20 @@ button[data-project-card="true"] span {
 .bg-sidebar [data-active="true"],
 .bg-sidebar [data-active="true"] span,
 .bg-sidebar [aria-selected="true"] {
-  font-weight: 520 !important;
   color: var(--ag-sidebar-selected-fg, #0D0D0D) !important;
 }
 
 .bg-sidebar :is([class*="text-muted"], [class*="text-[11px]"], [class*="uppercase"]) {
-  font-weight: 500 !important;
-  letter-spacing: -0.005em !important;
   color: var(--ag-sidebar-muted-fg, #676767) !important;
-}
-
-button, [role="button"], select {
-  letter-spacing: -0.012em;
-}
-
-[role="menu"], [role="menuitem"], [role="listbox"], [role="option"], [data-select-popup],
-[data-testid="title-menu-bar"], [data-testid="title-menu-bar-item"], [data-testid="title-menu-bar-option"],
-.agy-overlay, .agy-overlay-item, [data-radix-menu-content], [data-radix-popper-content-wrapper], [data-side] {
-  font-family: var(--font-sans) !important;
 }
 
 [role="option"]:not([data-disabled]),
 [data-testid="title-menu-bar-option"] {
-  font-weight: 450 !important;
-  letter-spacing: -0.01em !important;
   color: var(--ag-menu-item-fg, #171717) !important;
 }
 
 [role="menu"] :is([role="menuitem"], .agy-overlay-item, [class*="truncate"], [class*="text-xs"], [class*="text-[13px]"], span),
 .agy-overlay .agy-overlay-item {
-  font-weight: 400 !important;
-  letter-spacing: -0.01em !important;
   color: var(--ag-menu-item-fg, #171717) !important;
 }
 
@@ -309,30 +294,89 @@ button, [role="button"], select {
 [role="menu"] :is([role="menuitem"], .agy-overlay-item) :is(span[class*="flex-1"], span.truncate),
 .agy-overlay .agy-overlay-item > span,
 .agy-overlay .agy-overlay-item :is(span[class*="flex-1"], span.truncate) {
-  font-weight: 450 !important;
-  letter-spacing: -0.01em !important;
   color: var(--ag-menu-item-fg, #171717) !important;
 }
 
 [role="menu"] :is([class*="font-medium"], [class*="text-muted-foreground"], h2, h3, h4),
 .agy-overlay :is([class*="font-medium"], [class*="text-muted-foreground"]) {
-  font-weight: 500 !important;
-  letter-spacing: -0.01em !important;
   color: var(--ag-menu-header-fg, #171717) !important;
 }
 
-[role="dialog"] {
-  font-family: var(--font-sans) !important;
-}
-
 [role="dialog"] :is(h2, h3) {
-  font-weight: 500 !important;
-  letter-spacing: -0.01em !important;
   color: var(--ag-dialog-title-fg, #0D0D0D) !important;
 }
 
 [role="dialog"] :is(.agy-card, [class*="agy-card"], [class*="divide-border"]) span.text-sm {
+  color: var(--ag-dialog-item-fg, #171717) !important;
+}
+
+/* Sidebar, menus & dialogs typography (only when Custom Font Override is enabled) */
+html[data-ag-custom-font="true"] :is(.bg-sidebar :is(a, button, [class*="truncate"], [class*="text-sm"], [class*="text-xs"]), aside :is(a, button)) {
+  font-weight: 450 !important;
+  letter-spacing: -0.012em !important;
+}
+
+html[data-ag-custom-font="true"] :is([data-testid="conversation-row-sidebar"]:not([data-selected="true"]) span.truncate, .bg-sidebar [data-testid="conversation-row-sidebar"]:not([data-selected="true"]) [class*="truncate"], .agy-sidebar-row:not([data-selected="true"]) span.truncate, aside [data-testid="conversation-row-sidebar"]:not([data-selected="true"]) span) {
+  font-weight: 400 !important;
+  letter-spacing: -0.005em !important;
+}
+
+html[data-ag-custom-font="true"] :is(button[data-testid="project-header"], button[data-project-card="true"], [data-project-label], [data-subtext] span[class*="text-muted"], .bg-sidebar span:has(> svg) + span) {
+  font-weight: 450 !important;
+}
+
+html[data-ag-custom-font="true"] :is(button[data-testid="project-header"] span, button[data-project-card="true"] span) {
   font-weight: 450 !important;
   letter-spacing: -0.01em !important;
-  color: var(--ag-dialog-item-fg, #171717) !important;
+}
+
+html[data-ag-custom-font="true"] :is([data-testid="conversation-row-sidebar"][data-selected="true"], [data-testid="conversation-row-sidebar"][data-selected="true"] span, .bg-sidebar [data-testid="conversation-row-sidebar"][data-selected="true"] [class*="truncate"], .bg-sidebar [data-active="true"], .bg-sidebar [data-active="true"] span, .bg-sidebar [aria-selected="true"]) {
+  font-weight: 520 !important;
+}
+
+html[data-ag-custom-font="true"] .bg-sidebar :is([class*="text-muted"], [class*="text-[11px]"], [class*="uppercase"]) {
+  font-weight: 500 !important;
+  letter-spacing: -0.005em !important;
+}
+
+html[data-ag-custom-font="true"] :is(button, [role="button"], select) {
+  letter-spacing: -0.012em;
+}
+
+html[data-ag-custom-font="true"] :is([role="menu"], [role="menuitem"], [role="listbox"], [role="option"], [data-select-popup], [data-testid="title-menu-bar"], [data-testid="title-menu-bar-item"], [data-testid="title-menu-bar-option"], .agy-overlay, .agy-overlay-item, [data-radix-menu-content], [data-radix-popper-content-wrapper], [data-side]) {
+  font-family: var(--font-sans) !important;
+}
+
+html[data-ag-custom-font="true"] :is([role="option"]:not([data-disabled]), [data-testid="title-menu-bar-option"]) {
+  font-weight: 450 !important;
+  letter-spacing: -0.01em !important;
+}
+
+html[data-ag-custom-font="true"] :is([role="menu"] :is([role="menuitem"], .agy-overlay-item, [class*="truncate"], [class*="text-xs"], [class*="text-[13px]"], span), .agy-overlay .agy-overlay-item) {
+  font-weight: 400 !important;
+  letter-spacing: -0.01em !important;
+}
+
+html[data-ag-custom-font="true"] :is([role="menu"] :is([role="menuitem"], .agy-overlay-item) > span, [role="menu"] :is([role="menuitem"], .agy-overlay-item) :is(span[class*="flex-1"], span.truncate), .agy-overlay .agy-overlay-item > span, .agy-overlay .agy-overlay-item :is(span[class*="flex-1"], span.truncate)) {
+  font-weight: 450 !important;
+  letter-spacing: -0.01em !important;
+}
+
+html[data-ag-custom-font="true"] :is([role="menu"] :is([class*="font-medium"], [class*="text-muted-foreground"], h2, h3, h4), .agy-overlay :is([class*="font-medium"], [class*="text-muted-foreground"])) {
+  font-weight: 500 !important;
+  letter-spacing: -0.01em !important;
+}
+
+html[data-ag-custom-font="true"] [role="dialog"] {
+  font-family: var(--font-sans) !important;
+}
+
+html[data-ag-custom-font="true"] [role="dialog"] :is(h2, h3) {
+  font-weight: 500 !important;
+  letter-spacing: -0.01em !important;
+}
+
+html[data-ag-custom-font="true"] [role="dialog"] :is(.agy-card, [class*="agy-card"], [class*="divide-border"]) span.text-sm {
+  font-weight: 450 !important;
+  letter-spacing: -0.01em !important;
 }

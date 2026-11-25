@@ -59,7 +59,7 @@
     }
     metricsByCid[cid] = payload;
     const keys = Object.keys(metricsByCid);
-    if (keys.length > 12) {
+    if (keys.length > 4) {
       delete metricsByCid[keys[0]];
     }
   }
@@ -1073,6 +1073,7 @@
 
   function renderTurnMetrics(optionalPayload, optionalCid) {
     try {
+      if (document.hidden && !optionalPayload) return;
       if (optionalPayload && typeof optionalPayload === 'object') {
         const pCid = optionalCid || optionalPayload.cid || optionalPayload.cascadeId || '';
         if (pCid) storeMetricsPayload(pCid, optionalPayload);

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"hash/fnv"
 	"io"
 	"net/http"
 	"os"
@@ -108,21 +109,49 @@ type observationEntry struct {
 	Email string `json:"email"`
 }
 
+type summaryCacheKey struct {
+	worldSig      string
+	activeEmail   string
+	sessObsCount  int
+	sessLastAt    int64
+	period        int
+	accountFilter string
+}
+
 var (
-	cacheMu          sync.Mutex
-	activeEmail      string
-	ledgerSig        string
-	ledgerEvents     []cachedUsageEvent
-	ledgerDBKeys     map[string]bool
-	ledgerEventKeys  map[string]bool
-	convCache        = make(map[string]convFileCacheEntry)
-	acctEmailByID    = make(map[string]string)
-	acctIDByEmail    = make(map[string]string)
-	acctMapSig       string
-	obsTimeline      []observationEntry
-	obsSig           string
-	sessionObs       []observationEntry
+	cacheMu              sync.Mutex
+	activeEmail          string
+	ledgerSig            string
+	ledgerEvents         []cachedUsageEvent
+	ledgerDBKeys         map[string]bool
+	ledgerEventKeys      map[string]bool
+	convCache            = make(map[string]convFileCacheEntry)
+	convCacheLedgerSig   string
+	acctEmailByID        = make(map[string]string)
+	acctIDByEmail        = make(map[string]string)
+	acctMapSig           string
+	obsTimeline          []observationEntry
+	obsSig               string
+	sessionObs           []observationEntry
+	internTable          = make(map[string]string)
+	summaryCacheWorldSig string
+	summaryCache         = make(map[summaryCacheKey]Summary)
 )
+
+func internLocked(s string) string {
+	if s == "" {
+		return ""
+	}
+	if v, ok := internTable[s]; ok {
+		return v
+	}
+	if len(internTable) > 4096 {
+		clear(internTable)
+	}
+	cloned := strings.Clone(s)
+	internTable[cloned] = cloned
+	return cloned
+}
 
 // SetActiveAccountEmail updates the fallback active email attributed to newly scanned conversation events
 // and records in-session account switches so multi-account attribution stays accurate after switching.
@@ -145,16 +174,88 @@ func SetActiveAccountEmail(email string) {
 // period: 0=Today, 1=Last 7 Days, 2=Last 30 Days, 3=All Time.
 func LoadSummary(ctx context.Context, period int, accountFilter string) Summary {
 	hud.LoadPricingOverrides(config.StateDir())
+	refreshAccountLookup()
+	refreshObservations()
+
+	lSig := fileStatSig(filepath.Join(config.StateDir(), "usage-ledger-v2.sqlite"))
+	convHash, convCount := scanConversationDirSig()
+	pricingSig := fileStatSig(filepath.Join(config.StateDir(), "remote_pricing.json"))
+	now := time.Now()
+	dayStart := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location()).Unix()
+
+	cacheMu.Lock()
+	curActive := activeEmail
+	sessCount := len(sessionObs)
+	var sessLast int64
+	if sessCount > 0 {
+		sessLast = sessionObs[sessCount-1].At
+	}
+	curObsSig := obsSig
+	curAcctSig := acctMapSig
+	worldSig := lSig + "|" + strconv.FormatUint(convHash, 16) + ":" + strconv.Itoa(convCount) + "|" + curObsSig + "|" + curAcctSig + "|" + pricingSig + "|" + strconv.FormatInt(dayStart, 10)
+	key := summaryCacheKey{
+		worldSig:      worldSig,
+		activeEmail:   curActive,
+		sessObsCount:  sessCount,
+		sessLastAt:    sessLast,
+		period:        period,
+		accountFilter: strings.ToLower(strings.TrimSpace(accountFilter)),
+	}
+	if summaryCacheWorldSig == worldSig {
+		if cached, ok := summaryCache[key]; ok {
+			cacheMu.Unlock()
+			return cached
+		}
+	}
+	cacheMu.Unlock()
+
 	allEvents := loadMergedEvents(ctx)
-	return aggregateSummary(allEvents, period, accountFilter)
+	out := aggregateSummary(allEvents, period, accountFilter)
+
+	cacheMu.Lock()
+	if summaryCacheWorldSig != worldSig || len(summaryCache) >= 8 {
+		clear(summaryCache)
+		summaryCacheWorldSig = worldSig
+	}
+	summaryCache[key] = out
+	cacheMu.Unlock()
+
+	return out
+}
+
+func scanConversationDirSig() (uint64, int) {
+	convDir := filepath.Join(config.GeminiDir(), "antigravity", "conversations")
+	entries, err := os.ReadDir(convDir)
+	if err != nil {
+		return 0, 0
+	}
+	h := fnv.New64a()
+	count := 0
+	for _, ent := range entries {
+		name := ent.Name()
+		if ent.IsDir() || !strings.HasSuffix(name, ".db") {
+			continue
+		}
+		sig := fileStatSig(filepath.Join(convDir, name))
+		if sig == "" {
+			continue
+		}
+		count++
+		_, _ = h.Write([]byte(name))
+		_, _ = h.Write([]byte{'|'})
+		_, _ = h.Write([]byte(sig))
+		_, _ = h.Write([]byte{'\n'})
+	}
+	return h.Sum64(), count
 }
 
 func loadMergedEvents(ctx context.Context) []cachedUsageEvent {
 	refreshAccountLookup()
 	refreshObservations()
 
+	lSig := fileStatSig(filepath.Join(config.StateDir(), "usage-ledger-v2.sqlite"))
 	lEvents, lDBKeys, lTriplets := loadLedgerCached(ctx)
-	cEvents := scanConversationDBsCached(ctx)
+	cEvents := scanConversationDBsCached(ctx, lSig, lDBKeys, lTriplets)
 
 	cacheMu.Lock()
 	fallbackEmail := activeEmail
@@ -289,8 +390,9 @@ func loadLedgerCached(ctx context.Context) ([]cachedUsageEvent, map[string]bool,
 
 	evs := make([]cachedUsageEvent, 0, len(rows.Values))
 	dbKeys := make(map[string]bool, len(rows.Values))
-	triplets := make(map[string]bool, len(rows.Values))
+	triplets := make(map[string]bool)
 
+	cacheMu.Lock()
 	for _, r := range rows.Values {
 		if len(r) < 4 {
 			continue
@@ -331,9 +433,7 @@ func loadLedgerCached(ctx context.Context) ([]cachedUsageEvent, map[string]bool,
 		}
 		email := ev.AccountEmail
 		if email == "" && acctID != "" {
-			cacheMu.Lock()
 			email = acctEmailByID[acctID]
-			cacheMu.Unlock()
 		}
 		evUSD := ev.EstimatedUSD
 		if len(r) >= 5 {
@@ -356,16 +456,16 @@ func loadLedgerCached(ctx context.Context) ([]cachedUsageEvent, map[string]bool,
 
 		item := cachedUsageEvent{
 			Timestamp:        ts,
-			AccountID:        acctID,
-			AccountEmail:     email,
-			Model:            model,
+			AccountID:        internLocked(acctID),
+			AccountEmail:     internLocked(email),
+			Model:            internLocked(model),
 			InputTokens:      ev.InputTokens,
 			CachedTokens:     ev.CachedTokens,
 			CacheWriteTokens: ev.CacheWriteTokens,
 			OutputTokens:     ev.OutputTokens,
 			TotalTokens:      ev.TotalTokens,
 			EstimatedUSD:     evUSD,
-			DBFile:           dbBase,
+			DBFile:           internLocked(dbBase),
 		}
 		if ev.GenerationIndex != nil {
 			item.GenIdx = *ev.GenerationIndex
@@ -374,11 +474,12 @@ func loadLedgerCached(ctx context.Context) ([]cachedUsageEvent, map[string]bool,
 				dbKeys[dbGenKey] = true
 			}
 		}
-		triplets[tripletKey(ts, model, ev.TotalTokens)] = true
+		if dbGenKey == "" {
+			triplets[tripletKey(ts, item.Model, ev.TotalTokens)] = true
+		}
 		evs = append(evs, item)
 	}
 
-	cacheMu.Lock()
 	ledgerSig = sig
 	ledgerEvents = evs
 	ledgerDBKeys = dbKeys
@@ -388,13 +489,21 @@ func loadLedgerCached(ctx context.Context) ([]cachedUsageEvent, map[string]bool,
 	return evs, dbKeys, triplets
 }
 
-func scanConversationDBsCached(ctx context.Context) []cachedUsageEvent {
+func scanConversationDBsCached(ctx context.Context, curLedgerSig string, lDBKeys, lTriplets map[string]bool) []cachedUsageEvent {
 	convDir := filepath.Join(config.GeminiDir(), "antigravity", "conversations")
 	entries, err := os.ReadDir(convDir)
 	if err != nil {
 		return nil
 	}
 
+	cacheMu.Lock()
+	if convCacheLedgerSig != curLedgerSig {
+		clear(convCache)
+		convCacheLedgerSig = curLedgerSig
+	}
+	cacheMu.Unlock()
+
+	seen := make(map[string]struct{}, len(entries))
 	var out []cachedUsageEvent
 	for _, ent := range entries {
 		if ctx.Err() != nil {
@@ -409,6 +518,7 @@ func scanConversationDBsCached(ctx context.Context) []cachedUsageEvent {
 		if sig == "" {
 			continue
 		}
+		seen[fullPath] = struct{}{}
 
 		cacheMu.Lock()
 		cached, ok := convCache[fullPath]
@@ -418,12 +528,37 @@ func scanConversationDBsCached(ctx context.Context) []cachedUsageEvent {
 			continue
 		}
 
-		evs := scanSingleConversationDB(ctx, fullPath, name)
+		scanned := scanSingleConversationDB(ctx, fullPath, name)
+		var unmerged []cachedUsageEvent
+		if len(scanned) > 0 {
+			cacheMu.Lock()
+			for _, ev := range scanned {
+				dbBase := cleanDBBase(ev.DBFile)
+				if ev.HasGenIdx && dbBase != "" && lDBKeys[dbBase+":"+strconv.Itoa(ev.GenIdx)] {
+					continue
+				}
+				if lTriplets[tripletKey(ev.Timestamp, ev.Model, ev.TotalTokens)] {
+					continue
+				}
+				ev.Model = internLocked(ev.Model)
+				ev.DBFile = internLocked(ev.DBFile)
+				unmerged = append(unmerged, ev)
+			}
+			cacheMu.Unlock()
+		}
 		cacheMu.Lock()
-		convCache[fullPath] = convFileCacheEntry{sig: sig, events: evs}
+		convCache[fullPath] = convFileCacheEntry{sig: sig, events: unmerged}
 		cacheMu.Unlock()
-		out = append(out, evs...)
+		out = append(out, unmerged...)
 	}
+
+	cacheMu.Lock()
+	for k := range convCache {
+		if _, ok := seen[k]; !ok {
+			delete(convCache, k)
+		}
+	}
+	cacheMu.Unlock()
 	return out
 }
 

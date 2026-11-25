@@ -801,6 +801,16 @@ func (a *App) settingsPage(c *mygoui.Context) {
 			mygoui.Divider(c)
 			mygoui.Row(c).Gap(12).AlignItems(mygoui.Center).Children(func() {
 				mygoui.Column(c).Grow(1).Gap(2).Children(func() {
+					mygoui.Text(c, "修改界面字体").FontSize(13).Bold()
+					mygoui.Text(c, "覆盖 Antigravity 原生界面与代码字体栈，关闭后保留系统默认字体").FontSize(12).TextColor(t.TextMuted)
+				})
+				if mygoui.Switch(c, &a.cfg.CodexFontEnabled).Label("修改界面字体").Changed() {
+					a.saveConfig()
+				}
+			})
+			mygoui.Divider(c)
+			mygoui.Row(c).Gap(12).AlignItems(mygoui.Center).Children(func() {
+				mygoui.Column(c).Grow(1).Gap(2).Children(func() {
 					mygoui.Text(c, "主题强调色").FontSize(13).Bold()
 					mygoui.Text(c, "同步应用于 GravityBox 与 Antigravity 主按钮及选区高亮").FontSize(12).TextColor(t.TextMuted)
 				})

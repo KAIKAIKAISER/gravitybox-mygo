@@ -59,11 +59,14 @@ func TestNewControllerLoadsDictionary(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewController failed: %v", err)
 	}
+	defer ctrl.Stop()
 	st := ctrl.Status()
 	if st.DictionaryEntries < 1000 {
 		t.Fatalf("expected >1000 dictionary entries, got %d", st.DictionaryEntries)
 	}
-	ctrl.Stop()
+	if st.DictionaryVersion == "base" {
+		t.Fatalf("expected user zh-pack dictionary version instead of legacy base")
+	}
 }
 
 func TestDialWSOmitsOriginHeader(t *testing.T) {
@@ -122,11 +125,12 @@ func TestBuildCodexBundleAndSwarmTarget(t *testing.T) {
 	defer ctrl.Stop()
 
 	ctrl.UpdateCodexSettings(CodexSettings{
-		ThemeEnabled:       true,
-		ThemePreset:        "codex-dark",
-		TelemetryLayout:    "detailed",
-		TelemetryCacheMode: "step",
-		ThemeVars:          map[string]string{"--primary": "#059669"},
+		ThemeEnabled:        true,
+		FontOverrideEnabled: false,
+		ThemePreset:         "codex-dark",
+		TelemetryLayout:     "detailed",
+		TelemetryCacheMode:  "step",
+		ThemeVars:           map[string]string{"--primary": "#059669"},
 	})
 
 	ctrl.mu.Lock()
@@ -140,5 +144,30 @@ func TestBuildCodexBundleAndSwarmTarget(t *testing.T) {
 	}
 	if !strings.Contains(expr, `"themeForceMode":"dark"`) || !strings.Contains(expr, `"telemetryLayout":"detailed"`) || !strings.Contains(expr, `computeStatusSnapshot`) {
 		t.Fatalf("unexpected codex main boot expression")
+	}
+	if !strings.Contains(expr, `"customFont":false`) || !strings.Contains(expr, `"theme":true`) {
+		t.Fatalf("expected customFont=false and theme=true when FontOverrideEnabled=false")
+	}
+	if strings.Contains(expr, `"i18n":`) {
+		t.Fatalf("expected legacy codex i18n module flag to be removed")
+	}
+
+	ctrl.UpdateCodexSettings(CodexSettings{
+		ThemeEnabled:        true,
+		FontOverrideEnabled: true,
+		ThemePreset:         "codex-dark",
+		TelemetryLayout:     "detailed",
+		TelemetryCacheMode:  "step",
+	})
+	ctrl.mu.Lock()
+	ver = ctrl.codexPatchVersion
+	cfg = ctrl.codexCfg
+	ctrl.mu.Unlock()
+	exprOn, err := ctrl.buildCodexMainBootExpression(false, true, true, cfg, ver)
+	if err != nil {
+		t.Fatalf("buildCodexMainBootExpression failed: %v", err)
+	}
+	if !strings.Contains(exprOn, `"customFont":true`) {
+		t.Fatalf("expected customFont=true when FontOverrideEnabled=true")
 	}
 }
