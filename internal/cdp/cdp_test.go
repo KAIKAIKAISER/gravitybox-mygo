@@ -125,12 +125,11 @@ func TestBuildCodexBundleAndSwarmTarget(t *testing.T) {
 	defer ctrl.Stop()
 
 	ctrl.UpdateCodexSettings(CodexSettings{
-		ThemeEnabled:        true,
-		FontOverrideEnabled: false,
-		ThemePreset:         "codex-dark",
-		TelemetryLayout:     "detailed",
-		TelemetryCacheMode:  "step",
-		ThemeVars:           map[string]string{"--primary": "#059669"},
+		ThemeEnabled:       true,
+		ThemePreset:        "codex-dark",
+		TelemetryLayout:    "detailed",
+		TelemetryCacheMode: "step",
+		ThemeVars:          map[string]string{"--primary": "#059669"},
 	})
 
 	ctrl.mu.Lock()
@@ -145,42 +144,14 @@ func TestBuildCodexBundleAndSwarmTarget(t *testing.T) {
 	if !strings.Contains(expr, `"themeForceMode":"dark"`) || !strings.Contains(expr, `"telemetryLayout":"detailed"`) || !strings.Contains(expr, `computeStatusSnapshot`) {
 		t.Fatalf("unexpected codex main boot expression")
 	}
-	if !strings.Contains(expr, `"customFont":false`) || !strings.Contains(expr, `"theme":true`) {
-		t.Fatalf("expected customFont=false and theme=true when FontOverrideEnabled=false")
-	}
-	if strings.Contains(expr, `"i18n":`) {
-		t.Fatalf("expected legacy codex i18n module flag to be removed")
+	if strings.Contains(expr, `"customFont":`) || strings.Contains(expr, `"i18n":`) {
+		t.Fatalf("expected customFont and i18n module flags to be removed")
 	}
 
-	ctrl.UpdateCodexSettings(CodexSettings{
-		ThemeEnabled:        true,
-		FontOverrideEnabled: true,
-		ThemePreset:         "codex-dark",
-		TelemetryLayout:     "detailed",
-		TelemetryCacheMode:  "step",
-	})
-	ctrl.mu.Lock()
-	ver = ctrl.codexPatchVersion
-	cfg = ctrl.codexCfg
-	ctrl.mu.Unlock()
-	exprOn, err := ctrl.buildCodexMainBootExpression(false, true, true, cfg, ver)
-	if err != nil {
-		t.Fatalf("buildCodexMainBootExpression failed: %v", err)
-	}
-	if !strings.Contains(exprOn, `"customFont":true`) {
-		t.Fatalf("expected customFont=true when FontOverrideEnabled=true")
-	}
-
-	// Ensure no un-gated system-ui/Consolas font stacks or custom tracking leak outside customFont rules.
-	for _, block := range strings.Split(ctrl.codexFullCSS, "}") {
-		sel := strings.SplitN(block, "{", 2)[0]
-		if !strings.Contains(sel, `data-ag-custom-font="true"`) {
-			if strings.Contains(block, "system-ui") || strings.Contains(block, "Segoe UI") || strings.Contains(block, "Consolas") {
-				t.Fatalf("found un-gated custom font stack in selector: %s", strings.TrimSpace(sel))
-			}
-			if strings.Contains(block, "letter-spacing: -0.0") {
-				t.Fatalf("found un-gated negative letter-spacing in selector: %s", strings.TrimSpace(sel))
-			}
+	// Ensure no system font stacks or custom font-override selectors remain anywhere in codexFullCSS.
+	for _, needle := range []string{"system-ui", "Segoe UI", "Consolas", "data-ag-custom-font", "--vscode-font-family", "--ag-chat-font-size", "letter-spacing: -0.0"} {
+		if strings.Contains(ctrl.codexFullCSS, needle) {
+			t.Fatalf("found forbidden font override %q in codexFullCSS", needle)
 		}
 	}
 }

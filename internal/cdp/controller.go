@@ -40,13 +40,12 @@ type ControllerStatus struct {
 
 // CodexSettings configures Antigravity Codex theme & real-time telemetry injection.
 type CodexSettings struct {
-	ThemeEnabled        bool
-	FontOverrideEnabled bool
-	ThemePreset         string // "auto", "codex-pure-white", "codex-dark"
-	TelemetryLayout     string // "compact", "detailed"
-	TelemetryCacheMode  string // "session", "step"
-	ManualContextLimit  int
-	ThemeVars           map[string]string
+	ThemeEnabled       bool
+	ThemePreset        string // "auto", "codex-pure-white", "codex-dark"
+	TelemetryLayout    string // "compact", "detailed"
+	TelemetryCacheMode string // "session", "step"
+	ManualContextLimit int
+	ThemeVars          map[string]string
 }
 
 // HudHandler coordinates bi-directional runtime HUD metrics over CDP bindings.
@@ -116,11 +115,10 @@ func NewController(debugPort int, locale string, translationEnabled, hudEnabled 
 	}
 
 	defaultCodex := CodexSettings{
-		ThemeEnabled:        true,
-		FontOverrideEnabled: true,
-		ThemePreset:         "auto",
-		TelemetryLayout:     "compact",
-		TelemetryCacheMode:  "session",
+		ThemeEnabled:       true,
+		ThemePreset:        "auto",
+		TelemetryLayout:    "compact",
+		TelemetryCacheMode: "session",
 	}
 
 	sum := sha256.Sum256([]byte(bundle))
@@ -955,7 +953,6 @@ func (c *Controller) buildCodexMainBootExpression(isSwarm, codexActive, hudEnabl
 		},
 		"modules": map[string]bool{
 			"theme":             cfg.ThemeEnabled,
-			"customFont":        cfg.ThemeEnabled && cfg.FontOverrideEnabled,
 			"metrics":           hudEnabled && !isSwarm,
 			"promptSuggestions": false,
 			"deadlockHealer":    true,

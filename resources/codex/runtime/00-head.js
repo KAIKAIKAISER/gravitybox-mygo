@@ -20,7 +20,6 @@
   const MODULES = Object.assign(
     {
       theme: true,
-      customFont: true,
       metrics: true,
       deadlockHealer: true,
       zoomShortcuts: true,
@@ -132,11 +131,8 @@
       }
     }
 
-    if (varsObj && varsObj['--ag-chat-font-size']) {
-      document.documentElement.setAttribute('data-ag-custom-font-size', 'true');
-    } else {
-      document.documentElement.removeAttribute('data-ag-custom-font-size');
-    }
+    document.documentElement.removeAttribute('data-ag-custom-font');
+    document.documentElement.removeAttribute('data-ag-custom-font-size');
   }
 
   if (!ENABLED) {
@@ -189,11 +185,6 @@
   }
   if (MODULES.theme !== false) {
     applyThemeVars(THEME_VARS);
-    if (MODULES.customFont === true) {
-      document.documentElement.setAttribute('data-ag-custom-font', 'true');
-    } else {
-      document.documentElement.removeAttribute('data-ag-custom-font');
-    }
   } else {
     applyThemeVars({});
     for (const attr of ['data-ag-preset', 'data-ag-theme-mode', 'data-ag-force-mode', 'data-ag-custom-font', 'data-ag-custom-font-size']) {

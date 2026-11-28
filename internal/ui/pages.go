@@ -801,30 +801,6 @@ func (a *App) settingsPage(c *mygoui.Context) {
 			mygoui.Divider(c)
 			mygoui.Row(c).Gap(12).AlignItems(mygoui.Center).Children(func() {
 				mygoui.Column(c).Grow(1).Gap(2).Children(func() {
-					mygoui.Text(c, "修改界面字体").FontSize(13).Bold()
-					mygoui.Text(c, "覆盖 Antigravity 原生界面字体与字号，关闭后完全恢复系统默认字体").FontSize(12).TextColor(t.TextMuted)
-				})
-				if mygoui.Switch(c, &a.cfg.CodexFontEnabled).Label("修改界面字体").Changed() {
-					a.saveConfig()
-				}
-			})
-			if a.cfg.CodexFontEnabled {
-				mygoui.Divider(c)
-				mygoui.Row(c).Gap(12).AlignItems(mygoui.Center).Children(func() {
-					mygoui.Column(c).Grow(1).Gap(2).Children(func() {
-						mygoui.Text(c, "对话正文字号").FontSize(13).Bold()
-						mygoui.Text(c, "覆盖 Antigravity 对话消息正文显示字号").FontSize(12).TextColor(t.TextMuted)
-					})
-					fonts := []string{"默认", "14px", "15px", "16px"}
-					if mygoui.Select(c, &a.selectedChatFont, fonts).Label("对话正文字号").Changed() {
-						a.cfg.ChatFontSize = chatFontFromLabel(a.selectedChatFont)
-						a.saveConfig()
-					}
-				})
-			}
-			mygoui.Divider(c)
-			mygoui.Row(c).Gap(12).AlignItems(mygoui.Center).Children(func() {
-				mygoui.Column(c).Grow(1).Gap(2).Children(func() {
 					mygoui.Text(c, "主题强调色").FontSize(13).Bold()
 					mygoui.Text(c, "同步应用于 GravityBox 与 Antigravity 主按钮及选区高亮").FontSize(12).TextColor(t.TextMuted)
 				})

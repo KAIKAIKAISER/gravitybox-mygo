@@ -16,12 +16,10 @@ type Config struct {
 	HudEnabled           bool              `json:"hudEnabled"`           // Conversation HUD toggle
 	CodexThemeEnabled    bool              `json:"codexThemeEnabled"`    // Inject Codex day/night theme into Antigravity
 	CodexThemePreset     string            `json:"codexThemePreset"`     // "auto", "codex-pure-white", "codex-dark"
-	CodexFontEnabled     bool              `json:"codexFontEnabled"`     // Override Antigravity UI/chat fonts with system UI fonts
 	TelemetryLayout      string            `json:"telemetryLayout"`      // "compact", "detailed"
 	TelemetryCacheMode   string            `json:"telemetryCacheMode"`   // "session", "step"
 	ManualContextLimit   int               `json:"manualContextLimit"`   // 0 = auto detect from DB, else token limit
 	AccentColor          string            `json:"accentColor"`          // "blue", "emerald", "indigo", "amber"
-	ChatFontSize         int               `json:"chatFontSize"`         // 0 = default, or 14/15/16 px
 	ThemeVars            map[string]string `json:"themeVars,omitempty"`  // Optional CSS var overrides for Codex theme
 	StartInTray          bool              `json:"startInTray"`
 	LaunchAtLogin        bool              `json:"launchAtLogin"`
@@ -42,12 +40,10 @@ func DefaultConfig() Config {
 		HudEnabled:           true,
 		CodexThemeEnabled:    true,
 		CodexThemePreset:     "auto",
-		CodexFontEnabled:     true,
 		TelemetryLayout:      "compact",
 		TelemetryCacheMode:   "session",
 		ManualContextLimit:   0,
 		AccentColor:          "blue",
-		ChatFontSize:         0,
 		StartInTray:          false,
 		LaunchAtLogin:        false,
 		FollowAntigravity:    false,
@@ -137,9 +133,6 @@ func EffectiveCodexThemeVars(cfg Config) map[string]string {
 		out["--ag-send-btn-shadow"] = "0 2px 6px rgba(217, 119, 6, 0.28)"
 		out["--editor-selection-background"] = "rgba(217, 119, 6, 0.22)"
 	}
-	if cfg.CodexFontEnabled && cfg.ChatFontSize >= 12 && cfg.ChatFontSize <= 22 {
-		out["--ag-chat-font-size"] = string(rune('0'+cfg.ChatFontSize/10)) + string(rune('0'+cfg.ChatFontSize%10)) + "px"
-	}
 	for k, v := range cfg.ThemeVars {
 		if strings.HasPrefix(k, "--") && strings.TrimSpace(v) != "" {
 			out[k] = strings.TrimSpace(v)
@@ -218,9 +211,6 @@ func Load() Config {
 	if v, ok := parsed["codexThemeEnabled"].(bool); ok {
 		cfg.CodexThemeEnabled = v
 	}
-	if v, ok := parsed["codexFontEnabled"].(bool); ok {
-		cfg.CodexFontEnabled = v
-	}
 	if v, ok := parsed["codexThemePreset"].(string); ok && (v == "auto" || v == "codex-pure-white" || v == "codex-dark") {
 		cfg.CodexThemePreset = v
 	}
@@ -235,9 +225,6 @@ func Load() Config {
 	}
 	if v, ok := parsed["accentColor"].(string); ok && (v == "blue" || v == "emerald" || v == "indigo" || v == "amber") {
 		cfg.AccentColor = v
-	}
-	if v, ok := parsed["chatFontSize"].(float64); ok && (int(v) == 0 || (int(v) >= 12 && int(v) <= 22)) {
-		cfg.ChatFontSize = int(v)
 	}
 	if rawVars, ok := parsed["themeVars"].(map[string]any); ok && len(rawVars) > 0 {
 		vars := make(map[string]string, len(rawVars))

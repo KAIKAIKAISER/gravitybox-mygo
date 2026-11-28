@@ -34,7 +34,7 @@ import (
 	"gravitybox-mygo/resources"
 )
 
-const appVersion = "1.2.15"
+const appVersion = "1.2.16"
 
 var (
 	svgOverview    = mygoui.MustParseSVG([]byte(`<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg>`))
@@ -96,7 +96,6 @@ type App struct {
 	selectedAppTheme    string
 	selectedCodexPreset string
 	selectedAccent      string
-	selectedChatFont    string
 	selectedHudLayout   string
 	selectedCacheMode   string
 	selectedCtxLimit    string
@@ -173,13 +172,12 @@ func Run() error {
 	hudBridge.UpdateTelemetryConfig(cfg.TelemetryLayout, cfg.TelemetryCacheMode, cfg.ManualContextLimit)
 	ctrl.SetHudHandler(hudBridge)
 	ctrl.UpdateCodexSettings(cdp.CodexSettings{
-		ThemeEnabled:        cfg.CodexThemeEnabled,
-		FontOverrideEnabled: cfg.CodexFontEnabled,
-		ThemePreset:         cfg.CodexThemePreset,
-		TelemetryLayout:     cfg.TelemetryLayout,
-		TelemetryCacheMode:  cfg.TelemetryCacheMode,
-		ManualContextLimit:  cfg.ManualContextLimit,
-		ThemeVars:           config.EffectiveCodexThemeVars(cfg),
+		ThemeEnabled:       cfg.CodexThemeEnabled,
+		ThemePreset:        cfg.CodexThemePreset,
+		TelemetryLayout:    cfg.TelemetryLayout,
+		TelemetryCacheMode: cfg.TelemetryCacheMode,
+		ManualContextLimit: cfg.ManualContextLimit,
+		ThemeVars:          config.EffectiveCodexThemeVars(cfg),
 	})
 	asCfg := accounts.LoadAutoSwitch()
 	app := &App{
@@ -192,7 +190,6 @@ func Run() error {
 		selectedAppTheme:     appThemeLabel(cfg.AppTheme),
 		selectedCodexPreset:  codexPresetLabel(cfg.CodexThemePreset),
 		selectedAccent:       accentLabel(cfg.AccentColor),
-		selectedChatFont:     chatFontLabel(cfg.ChatFontSize),
 		selectedHudLayout:    hudLayoutLabel(cfg.TelemetryLayout),
 		selectedCacheMode:    cacheModeLabel(cfg.TelemetryCacheMode),
 		selectedCtxLimit:     ctxLimitLabel(cfg.ManualContextLimit),
@@ -385,13 +382,12 @@ func (a *App) refreshAsync() {
 			asarSt.IsPatched,
 		)
 		a.controller.UpdateCodexSettings(cdp.CodexSettings{
-			ThemeEnabled:        a.cfg.CodexThemeEnabled,
-			FontOverrideEnabled: a.cfg.CodexFontEnabled,
-			ThemePreset:         a.cfg.CodexThemePreset,
-			TelemetryLayout:     a.cfg.TelemetryLayout,
-			TelemetryCacheMode:  a.cfg.TelemetryCacheMode,
-			ManualContextLimit:  a.cfg.ManualContextLimit,
-			ThemeVars:           config.EffectiveCodexThemeVars(a.cfg),
+			ThemeEnabled:       a.cfg.CodexThemeEnabled,
+			ThemePreset:        a.cfg.CodexThemePreset,
+			TelemetryLayout:    a.cfg.TelemetryLayout,
+			TelemetryCacheMode: a.cfg.TelemetryCacheMode,
+			ManualContextLimit: a.cfg.ManualContextLimit,
+			ThemeVars:          config.EffectiveCodexThemeVars(a.cfg),
 		})
 		if a.hudBridge != nil {
 			a.hudBridge.UpdateTelemetryConfig(a.cfg.TelemetryLayout, a.cfg.TelemetryCacheMode, a.cfg.ManualContextLimit)
@@ -792,13 +788,12 @@ func (a *App) saveConfig() {
 			a.asarStatus.IsPatched,
 		)
 		a.controller.UpdateCodexSettings(cdp.CodexSettings{
-			ThemeEnabled:        a.cfg.CodexThemeEnabled,
-			FontOverrideEnabled: a.cfg.CodexFontEnabled,
-			ThemePreset:         a.cfg.CodexThemePreset,
-			TelemetryLayout:     a.cfg.TelemetryLayout,
-			TelemetryCacheMode:  a.cfg.TelemetryCacheMode,
-			ManualContextLimit:  a.cfg.ManualContextLimit,
-			ThemeVars:           config.EffectiveCodexThemeVars(a.cfg),
+			ThemeEnabled:       a.cfg.CodexThemeEnabled,
+			ThemePreset:        a.cfg.CodexThemePreset,
+			TelemetryLayout:    a.cfg.TelemetryLayout,
+			TelemetryCacheMode: a.cfg.TelemetryCacheMode,
+			ManualContextLimit: a.cfg.ManualContextLimit,
+			ThemeVars:          config.EffectiveCodexThemeVars(a.cfg),
 		})
 	}
 	if a.hudBridge != nil {
@@ -1216,32 +1211,6 @@ func accentFromLabel(s string) string {
 		return "amber"
 	default:
 		return "blue"
-	}
-}
-
-func chatFontLabel(px int) string {
-	switch px {
-	case 14:
-		return "14px"
-	case 15:
-		return "15px"
-	case 16:
-		return "16px"
-	default:
-		return "默认"
-	}
-}
-
-func chatFontFromLabel(s string) int {
-	switch s {
-	case "14px":
-		return 14
-	case "15px":
-		return 15
-	case "16px":
-		return 16
-	default:
-		return 0
 	}
 }
 
