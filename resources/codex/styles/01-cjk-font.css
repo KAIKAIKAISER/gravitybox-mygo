@@ -1,0 +1,31 @@
+/* ============================================================================
+ * 01-cjk-font.css — Preserve Antigravity native fonts & add Source Han Sans (Noto Sans SC) for CJK
+ * ============================================================================ */
+
+:root {
+  --font-sans: var(--vscode-font-family, "Noto Sans SC", "Source Han Sans SC", "Noto Sans CJK SC", system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif);
+}
+
+body[data-agy-font="google-sans"],
+body[data-agy-font="google-sans"] :where(.font-sans) {
+  --font-sans: "Google Sans Flex", "Google Sans", "Noto Sans SC", "Source Han Sans SC", "Noto Sans CJK SC", system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif !important;
+}
+
+body[data-agy-font="google-sans"],
+body[data-agy-font="google-sans"] :where(code, pre, kbd, samp, .font-mono, .code-block, .xterm, .monaco-editor, .katex) {
+  --font-mono: 'Google Sans Code', ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Noto Sans SC", "Source Han Sans SC", "Noto Sans CJK SC", 'Liberation Mono', 'Courier New', monospace !important;
+}
+
+body[data-agy-font="inter"],
+body[data-agy-font="inter"] :where(.font-sans) {
+  --font-sans: "Inter", "Noto Sans SC", "Source Han Sans SC", "Noto Sans CJK SC", system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif !important;
+}
+
+body[data-agy-font="inter"],
+body[data-agy-font="inter"] :where(code, pre, kbd, samp, .font-mono, .code-block, .xterm, .monaco-editor, .katex) {
+  --font-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Noto Sans SC", "Source Han Sans SC", "Noto Sans CJK SC", 'Liberation Mono', 'Courier New', monospace !important;
+}
+
+body[data-agy-font]:not([data-agy-font="google-sans"]):not([data-agy-font="inter"]) {
+  --font-sans: var(--vscode-font-family, "Noto Sans SC", "Source Han Sans SC", "Noto Sans CJK SC", system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif);
+}

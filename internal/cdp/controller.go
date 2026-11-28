@@ -1067,9 +1067,10 @@ func buildRuntimeBundle() (string, error) {
 
 func buildCodexBundle() (bundleJS, fullCSS, hudCSS string, err error) {
 	var styleParts []string
-	var hudOnly string
+	var hudParts []string
 	for _, name := range []string{
 		"codex/styles/00-base.css",
+		"codex/styles/01-cjk-font.css",
 		"codex/styles/10-light-codex.css",
 		"codex/styles/20-dark-codex.css",
 		"codex/styles/30-telemetry.css",
@@ -1079,8 +1080,8 @@ func buildCodexBundle() (bundleJS, fullCSS, hudCSS string, err error) {
 			return "", "", "", rerr
 		}
 		styleParts = append(styleParts, string(raw))
-		if name == "codex/styles/30-telemetry.css" {
-			hudOnly = string(raw)
+		if name == "codex/styles/01-cjk-font.css" || name == "codex/styles/30-telemetry.css" {
+			hudParts = append(hudParts, string(raw))
 		}
 	}
 
@@ -1101,7 +1102,7 @@ func buildCodexBundle() (bundleJS, fullCSS, hudCSS string, err error) {
 		jsParts = append(jsParts, string(raw))
 	}
 
-	return strings.Join(jsParts, "\n\n"), strings.Join(styleParts, "\n"), hudOnly, nil
+	return strings.Join(jsParts, "\n\n"), strings.Join(styleParts, "\n"), strings.Join(hudParts, "\n"), nil
 }
 
 func stripESM(code string) string {

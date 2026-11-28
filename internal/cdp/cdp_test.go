@@ -148,8 +148,13 @@ func TestBuildCodexBundleAndSwarmTarget(t *testing.T) {
 		t.Fatalf("expected customFont and i18n module flags to be removed")
 	}
 
-	// Ensure no system font stacks or custom font-override selectors remain anywhere in codexFullCSS.
-	for _, needle := range []string{"system-ui", "Segoe UI", "Consolas", "data-ag-custom-font", "--vscode-font-family", "--ag-chat-font-size", "letter-spacing: -0.0"} {
+	// Preserve Antigravity native Latin/code fonts while adding Source Han Sans (Noto Sans SC) for CJK fallback.
+	for _, css := range []string{ctrl.codexFullCSS, ctrl.codexHudCSS} {
+		if !strings.Contains(css, `"Google Sans Flex"`) || !strings.Contains(css, `"Noto Sans SC"`) {
+			t.Fatalf("expected native Google Sans Flex + Noto Sans SC fallback in codex CSS")
+		}
+	}
+	for _, needle := range []string{"Microsoft YaHei", "data-ag-custom-font", "--ag-chat-font-size", "letter-spacing: -0.0"} {
 		if strings.Contains(ctrl.codexFullCSS, needle) {
 			t.Fatalf("found forbidden font override %q in codexFullCSS", needle)
 		}
